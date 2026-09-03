@@ -6,10 +6,12 @@
  * approach when the server supports advanced filtering.
  */
 
+import type { Task, GetTasksParams } from 'node-vikunja';
 import type { TaskFilteringStrategy } from './TaskFilteringStrategy';
 import type { FilteringParams, FilteringResult } from './types';
 import { getClientFromContext } from '../../client';
 import { validateId } from '../../tools/tasks/validation';
+import { fetchTaskPages } from './paginateTasks';
 import { logger } from '../logger';
 import { MCPError, ErrorCode } from '../../types';
 
@@ -32,33 +34,42 @@ export class ServerSideFilteringStrategy implements TaskFilteringStrategy {
       endpoint: args.projectId && !args.allProjects ? 'getProjectTasks' : 'getAllTasks'
     });
     
-    let tasks;
     try {
+      // Validate project ID up front when scoping to a project.
       if (args.projectId !== undefined && !args.allProjects) {
-        // Validate project ID
         validateId(args.projectId, 'projectId');
-        // Get tasks for specific project with server-side filter
-        tasks = await client.tasks.getProjectTasks(args.projectId, serverParams);
-      } else {
-        // Get all tasks across all projects with server-side filter
-        tasks = await client.tasks.getAllTasks(serverParams);
       }
-      
+
+      // One page fetcher (carries the server-side filter) used for both the
+      // single-page and auto-paginate contracts.
+      const fetchPage = (params: GetTasksParams): Promise<Task[] | undefined> =>
+        args.projectId !== undefined && !args.allProjects
+          ? client.tasks.getProjectTasks(args.projectId, params)
+          : client.tasks.getAllTasks(params);
+
+      const pageResult = await fetchTaskPages(fetchPage, serverParams, Boolean(args.allTasks));
+      const tasks = pageResult.tasks;
+
       logger.info('Server-side filtering completed successfully', {
         taskCount: tasks?.length || 0,
-        filter: filterString
+        filter: filterString,
+        paginationMode: pageResult.paginationMode,
+        pagesFetched: pageResult.pagesFetched,
       });
-      
+
       return {
         tasks: tasks || [],
         metadata: {
           serverSideFilteringUsed: true,
           serverSideFilteringAttempted: true,
           clientSideFiltering: false,
-          filteringNote: 'Server-side filtering used (modern Vikunja)'
+          filteringNote: 'Server-side filtering used (modern Vikunja)',
+          paginationMode: pageResult.paginationMode,
+          pagesFetched: pageResult.pagesFetched,
+          ...(pageResult.possiblyTruncated ? { possiblyTruncated: true } : {}),
         }
       };
-      
+
     } catch (error) {
       logger.error('Server-side filtering failed', {
         error: error instanceof Error ? error.message : String(error),

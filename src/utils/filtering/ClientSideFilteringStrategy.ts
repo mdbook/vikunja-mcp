@@ -6,11 +6,13 @@
  * with all versions of Vikunja but may be less efficient for large datasets.
  */
 
+import type { Task, GetTasksParams } from 'node-vikunja';
 import type { TaskFilteringStrategy } from './TaskFilteringStrategy';
 import type { FilteringParams, FilteringResult } from './types';
 import { getClientFromContext } from '../../client';
 import { validateId } from '../../tools/tasks/validation';
 import { applyFilter } from '../../tools/tasks/filtering';
+import { fetchTaskPages } from './paginateTasks';
 import { logger } from '../logger';
 
 export class ClientSideFilteringStrategy implements TaskFilteringStrategy {
@@ -24,27 +26,34 @@ export class ClientSideFilteringStrategy implements TaskFilteringStrategy {
       endpoint: args.projectId && !args.allProjects ? 'getProjectTasks' : 'getAllTasks'
     });
     
-    // Load tasks without server-side filtering
-    let tasks;
+    // Validate project ID up front when scoping to a project.
     if (args.projectId !== undefined && !args.allProjects) {
-      // Validate project ID
       validateId(args.projectId, 'projectId');
-      // Get tasks for specific project without filter
-      tasks = await client.tasks.getProjectTasks(args.projectId, apiParams);
-    } else {
-      // Get all tasks across all projects without filter  
-      tasks = await client.tasks.getAllTasks(apiParams);
     }
-    
+
+    // One page fetcher used for both single-page and auto-paginate contracts.
+    const fetchPage = (params: GetTasksParams): Promise<Task[] | undefined> =>
+      args.projectId !== undefined && !args.allProjects
+        ? client.tasks.getProjectTasks(args.projectId, params)
+        : client.tasks.getAllTasks(params);
+
+    // Load tasks without server-side filtering. When client-side filtering a
+    // full page's worth of tasks may be scattered across pages, so auto-paginate
+    // (opt-in via allTasks) is what makes a client-side sweep complete.
+    const pageResult = await fetchTaskPages(fetchPage, apiParams, Boolean(args.allTasks));
+    const tasks = pageResult.tasks;
+
     logger.info('Tasks loaded for client-side filtering', {
       totalTasksLoaded: tasks?.length || 0,
-      filter: filterString
+      filter: filterString,
+      paginationMode: pageResult.paginationMode,
+      pagesFetched: pageResult.pagesFetched,
     });
-    
+
     // Apply client-side filtering if we have a filter expression
     const safeTasks = tasks || [];
     let filteredTasks = safeTasks;
-    
+
     if (filterExpression) {
       const originalCount = safeTasks.length;
       filteredTasks = applyFilter(safeTasks, filterExpression);
@@ -54,7 +63,7 @@ export class ClientSideFilteringStrategy implements TaskFilteringStrategy {
         filter: filterString,
       });
     }
-    
+
     return {
       tasks: filteredTasks || [],
       metadata: {
@@ -63,7 +72,10 @@ export class ClientSideFilteringStrategy implements TaskFilteringStrategy {
         clientSideFiltering: Boolean(filterExpression),
         filteringNote: filterExpression
           ? 'Client-side filtering applied'
-          : 'No filter applied; tasks returned as loaded'
+          : 'No filter applied; tasks returned as loaded',
+        paginationMode: pageResult.paginationMode,
+        pagesFetched: pageResult.pagesFetched,
+        ...(pageResult.possiblyTruncated ? { possiblyTruncated: true } : {}),
       }
     };
   }
