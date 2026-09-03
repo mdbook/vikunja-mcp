@@ -12,7 +12,7 @@ import { MCPError, ErrorCode } from '../types';
 import { getClientFromContext, setGlobalClientFactory } from '../client';
 import { logger } from '../utils/logger';
 import { createAuthRequiredError } from '../utils/error-handler';
-import { handleComment, listComments } from '../tools/tasks/comments/index';
+import { handleComment, listComments, updateComment, deleteComment } from '../tools/tasks/comments/index';
 
 /**
  * Register task comments tool
@@ -24,9 +24,10 @@ export function registerTaskCommentsTool(
 ): void {
   server.tool(
     'vikunja_task_comments',
-    'Manage task comments: add comments to tasks or list a task\'s comments',
+    'Manage task comments: add (comment), list, update (edit an existing comment), or delete a comment. '
+      + 'update requires id + commentId + comment (new text); delete requires id + commentId.',
     {
-      operation: z.enum(['comment', 'list']),
+      operation: z.enum(['comment', 'list', 'update', 'delete']),
       // Task and comment identification
       id: z.number(),
       comment: z.string().optional(),
@@ -58,6 +59,19 @@ export function registerTaskCommentsTool(
 
           case 'list':
             return await listComments({ id: args.id });
+
+          case 'update':
+            return await updateComment({
+              id: args.id,
+              ...(args.commentId !== undefined ? { commentId: args.commentId } : {}),
+              ...(args.comment !== undefined ? { comment: args.comment } : {}),
+            });
+
+          case 'delete':
+            return await deleteComment({
+              id: args.id,
+              ...(args.commentId !== undefined ? { commentId: args.commentId } : {}),
+            });
 
           default:
             throw new MCPError(

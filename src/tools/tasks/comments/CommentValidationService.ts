@@ -54,6 +54,71 @@ export const commentValidationService = {
   },
 
   /**
+   * Validate input for updating (editing) a comment.
+   * Requires a task id, a comment id, and non-empty comment text.
+   */
+  validateUpdateInput(args: {
+    id?: number;
+    commentId?: number;
+    comment?: string;
+  }): { taskId: number; commentId: number; commentText: string } {
+    if (!args.id) {
+      throw new MCPError(ErrorCode.VALIDATION_ERROR, 'Task id is required for update-comment operation');
+    }
+    validateId(args.id, 'id');
+
+    if (!args.commentId) {
+      throw new MCPError(
+        ErrorCode.VALIDATION_ERROR,
+        'commentId is required for update-comment operation',
+      );
+    }
+    validateId(args.commentId, 'commentId');
+
+    // Mirror 26af7ac: reject missing/empty/whitespace-only text rather than
+    // silently succeeding with an empty edit.
+    if (args.comment === undefined || args.comment.trim() === '') {
+      throw new MCPError(
+        ErrorCode.VALIDATION_ERROR,
+        'comment text is required for the update-comment operation',
+      );
+    }
+
+    return {
+      taskId: args.id,
+      commentId: args.commentId,
+      commentText: args.comment,
+    };
+  },
+
+  /**
+   * Validate input for deleting a comment.
+   * Requires a task id and a comment id.
+   */
+  validateDeleteInput(args: { id?: number; commentId?: number }): {
+    taskId: number;
+    commentId: number;
+  } {
+    if (!args.id) {
+      throw new MCPError(ErrorCode.VALIDATION_ERROR, 'Task id is required for delete-comment operation');
+    }
+    validateId(args.id, 'id');
+
+    if (!args.commentId) {
+      throw new MCPError(
+        ErrorCode.VALIDATION_ERROR,
+        'commentId is required for delete-comment operation',
+      );
+    }
+    validateId(args.commentId, 'commentId');
+
+    return {
+      taskId: args.id,
+      commentId: args.commentId,
+    };
+  },
+
+  /**
    * Check if operation should create a comment or list comments
    */
   shouldCreateComment(commentText?: string): boolean {
