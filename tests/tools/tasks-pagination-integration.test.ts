@@ -53,6 +53,23 @@ function makeTasks(count: number, offset = 0): Task[] {
   })) as unknown as Task[];
 }
 
+/**
+ * A faithful Vikunja-like getAllTasks over a fixed N-row store: it honours
+ * `page`/`per_page` the way the server does (offset = (page-1)*per_page, capped
+ * at MaxItemsPerPage), so the probe's offset math is genuinely exercised — a
+ * wrong probe offset would read inside the returned page and false-positive.
+ */
+function makeOffsetRespectingGetAllTasks(total: number, cap = 50) {
+  const store = makeTasks(total);
+  return jest.fn((params?: GetTasksParams): Promise<Task[]> => {
+    const page = params?.page ?? 1;
+    const perPage = params?.per_page ?? cap;
+    const offset = (page - 1) * perPage;
+    const limit = Math.min(perPage, cap);
+    return Promise.resolve(store.slice(offset, offset + limit));
+  });
+}
+
 function captureHandler(): Handler {
   const tool = jest.fn();
   const server = { tool } as unknown as McpServer;
@@ -73,12 +90,8 @@ describe('task list pagination truncation (integration)', () => {
     jest.clearAllMocks();
   });
 
-  it('flags truncation (metadata + summary) on a default sweep the server caps at 50', async () => {
-    const getAllTasks = jest.fn<(p?: GetTasksParams) => Promise<Task[]>>()
-      // page 1: server caps the inflated per_page:1000 down to 50
-      .mockResolvedValueOnce(makeTasks(50, 0))
-      // page+1 lookahead (per_page:1): a real next item exists
-      .mockResolvedValueOnce(makeTasks(1, 50));
+  it('flags truncation (metadata + summary) on a default sweep with 51 records (cap 50)', async () => {
+    const getAllTasks = makeOffsetRespectingGetAllTasks(51);
     mockedGetClient.mockResolvedValue({
       tasks: { getAllTasks, getProjectTasks: jest.fn() },
     } as never);
@@ -95,16 +108,36 @@ describe('task list pagination truncation (integration)', () => {
     expect(md).toContain('possiblyTruncated');
 
     // Proof of the real wiring: prepareQueryParameters inflated per_page to 1000,
-    // and the truncation signal came from a per_page:1 lookahead — NOT from the
-    // (wrong) requested-size comparison.
+    // and the truncation signal came from an offset-correct probe (page 51 →
+    // offset 50, the record right after the returned page) — NOT the requested-
+    // size comparison and NOT offset 1.
     expect(getAllTasks).toHaveBeenCalledTimes(2);
     expect(getAllTasks.mock.calls[0][0]).toMatchObject({ per_page: 1000 });
-    expect(getAllTasks.mock.calls[1][0]).toMatchObject({ per_page: 1 });
+    expect(getAllTasks.mock.calls[1][0]).toMatchObject({ page: 51, per_page: 1 });
+  });
+
+  it('does NOT flag when the default sweep returns EXACTLY 50 (cap == total)', async () => {
+    // The acceptance criterion the earlier offset bug broke: the probe at
+    // offset 50 returns [] → no false positive.
+    const getAllTasks = makeOffsetRespectingGetAllTasks(50);
+    mockedGetClient.mockResolvedValue({
+      tasks: { getAllTasks, getProjectTasks: jest.fn() },
+    } as never);
+
+    const handler = captureHandler();
+    const res = await handler({ operation: 'list', allProjects: true });
+    const md = res.content[0].text;
+
+    expect(md).toContain('Found 50 tasks');
+    expect(md).not.toContain('page full');
+    expect(md).not.toContain('possiblyTruncated');
+    // Data page + one probe; probe at offset 50 (page 51) came back empty.
+    expect(getAllTasks).toHaveBeenCalledTimes(2);
+    expect(getAllTasks.mock.calls[1][0]).toMatchObject({ page: 51, per_page: 1 });
   });
 
   it('does NOT flag a small default result (no lookahead, no warning)', async () => {
-    const getAllTasks = jest.fn<(p?: GetTasksParams) => Promise<Task[]>>()
-      .mockResolvedValue(makeTasks(30, 0));
+    const getAllTasks = makeOffsetRespectingGetAllTasks(30);
     mockedGetClient.mockResolvedValue({
       tasks: { getAllTasks, getProjectTasks: jest.fn() },
     } as never);

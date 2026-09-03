@@ -12,6 +12,28 @@ function makeTasks(count: number, offset = 0): Task[] {
   })) as unknown as Task[];
 }
 
+/**
+ * A FAITHFUL Vikunja-like page fetcher over a fixed N-row store. It respects the
+ * query's `page`/`per_page` exactly the way the server does:
+ *   offset = (page - 1) * per_page   (uses the REQUESTED per_page)
+ *   limit  = min(per_page, cap)      (server caps at MaxItemsPerPage)
+ * returning `store.slice(offset, offset + limit)`.
+ *
+ * This is what a param-ignoring `mockResolvedValueOnce` stub can't do — it's the
+ * only kind of fake that actually exercises the probe's offset math (a wrong
+ * probe offset reads records INSIDE the returned page and false-positives).
+ */
+function makeOffsetRespectingFetch(total: number, cap = 50) {
+  const store = makeTasks(total);
+  return jest.fn((params: GetTasksParams): Promise<Task[]> => {
+    const page = params.page ?? 1;
+    const perPage = params.per_page ?? cap;
+    const offset = (page - 1) * perPage;
+    const limit = Math.min(perPage, cap);
+    return Promise.resolve(store.slice(offset, offset + limit));
+  });
+}
+
 describe('fetchTaskPages', () => {
   describe('single-page (default) contract', () => {
     it('fetches exactly one page and honors the caller params', async () => {
@@ -50,60 +72,77 @@ describe('fetchTaskPages', () => {
     });
   });
 
-  describe('server-cap truncation detection (lookahead)', () => {
-    // The bug the reviewer reproduced: prepareQueryParameters inflates a missing
-    // per_page to 1000, but the server caps a page at ~50. `50 >= 1000` is false,
-    // so the naive check misses the truncation. The lookahead keys off the
-    // server's REAL cap instead.
-    it('flags possiblyTruncated via lookahead when an inflated per_page hides a server cap', async () => {
-      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
-        // page 1: server caps the inflated per_page:1000 down to 50
-        .mockResolvedValueOnce(makeTasks(50, 0))
-        // page+1 lookahead (per_page:1): a real next item exists → more to fetch
-        .mockResolvedValueOnce(makeTasks(1, 50));
+  describe('server-cap truncation detection (offset-respecting lookahead)', () => {
+    // The bug the reviewer reproduced twice: prepareQueryParameters inflates a
+    // missing per_page to 1000, the server caps a page at ~50, and the probe
+    // must read the record AFTER the returned page (offset == page length), NOT
+    // offset 1 (which is inside the page). These use a faithful offset-respecting
+    // fake so a wrong probe offset genuinely fails the test.
+
+    it('EXACTLY 50 total (cap 50, per_page inflated to 1000) → possiblyTruncated FALSE', async () => {
+      // The core acceptance case. Probe at offset 50 must return [] → not truncated.
+      const fetchPage = makeOffsetRespectingFetch(50);
 
       const result = await fetchTaskPages(fetchPage, { page: 1, per_page: 1000 }, false);
 
+      expect(result.tasks).toHaveLength(50);
+      expect(result.possiblyTruncated).toBeUndefined();
+      // Two calls: the data page + the probe. Probe offset == returned length.
       expect(fetchPage).toHaveBeenCalledTimes(2);
-      // The lookahead is a minimal next-page probe.
-      expect(fetchPage.mock.calls[1][0]).toMatchObject({ page: 2, per_page: 1 });
-      expect(result.paginationMode).toBe('single-page');
-      expect(result.pagesFetched).toBe(1); // pagesFetched counts the data page, not the probe
+      const probe = fetchPage.mock.calls[1][0];
+      expect(probe).toMatchObject({ page: 51, per_page: 1 }); // page = len + 1 → offset 50
+    });
+
+    it('51 total → possiblyTruncated TRUE (probe at offset 50 finds record #51)', async () => {
+      const fetchPage = makeOffsetRespectingFetch(51);
+
+      const result = await fetchTaskPages(fetchPage, { page: 1, per_page: 1000 }, false);
+
+      expect(result.tasks).toHaveLength(50);
+      expect(result.possiblyTruncated).toBe(true);
+      expect(fetchPage.mock.calls[1][0]).toMatchObject({ page: 51, per_page: 1 });
+    });
+
+    it('200 total → possiblyTruncated TRUE', async () => {
+      const fetchPage = makeOffsetRespectingFetch(200);
+
+      const result = await fetchTaskPages(fetchPage, { page: 1, per_page: 1000 }, false);
+
       expect(result.tasks).toHaveLength(50);
       expect(result.possiblyTruncated).toBe(true);
     });
 
-    it('does NOT flag when a cap-sized page is actually the whole result (lookahead empty)', async () => {
-      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
-        .mockResolvedValueOnce(makeTasks(50, 0))
-        .mockResolvedValueOnce([]); // no next item → exactly 50 total
-
-      const result = await fetchTaskPages(fetchPage, { page: 1, per_page: 1000 }, false);
-
-      expect(fetchPage).toHaveBeenCalledTimes(2);
-      expect(result.possiblyTruncated).toBeUndefined();
-    });
-
-    it('covers an explicit perPage larger than the server cap', async () => {
-      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
-        .mockResolvedValueOnce(makeTasks(50, 0)) // asked 200, server capped to 50
-        .mockResolvedValueOnce(makeTasks(1, 50));
+    it('covers an explicit perPage larger than the server cap (200 requested, 60 total)', async () => {
+      const fetchPage = makeOffsetRespectingFetch(60);
 
       const result = await fetchTaskPages(fetchPage, { per_page: 200 }, false);
 
-      expect(fetchPage).toHaveBeenCalledTimes(2);
+      // Server capped to 50; probe at offset 50 finds records 51..60 → truncated.
+      expect(result.tasks).toHaveLength(50);
       expect(result.possiblyTruncated).toBe(true);
+      expect(fetchPage.mock.calls[1][0]).toMatchObject({ page: 51, per_page: 1 });
     });
 
-    it('skips the lookahead for a small page below the cap threshold', async () => {
-      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
-        .mockResolvedValue(makeTasks(30, 0));
+    it('30 total (< threshold) → FALSE with NO lookahead', async () => {
+      const fetchPage = makeOffsetRespectingFetch(30);
 
       const result = await fetchTaskPages(fetchPage, { per_page: 1000 }, false);
 
-      // 30 < 50 → almost certainly the whole result → no extra round-trip
-      expect(fetchPage).toHaveBeenCalledTimes(1);
+      expect(result.tasks).toHaveLength(30);
       expect(result.possiblyTruncated).toBeUndefined();
+      expect(fetchPage).toHaveBeenCalledTimes(1); // no probe
+    });
+
+    it('probe targets offset == returned length, not offset 1 (regression guard)', async () => {
+      // With the OLD buggy probe ({page:2, per_page:1} → offset 1), a store of
+      // exactly 50 would return record #2 and false-positive. The offset-respecting
+      // fake makes that failure real: assert the exactly-50 store stays FALSE.
+      const fetchPage = makeOffsetRespectingFetch(50);
+      const result = await fetchTaskPages(fetchPage, { per_page: 1000 }, false);
+      expect(result.possiblyTruncated).toBeUndefined();
+      // The probe must NOT be page 2 (offset 1); it must be page 51 (offset 50).
+      expect(fetchPage.mock.calls[1][0]).not.toMatchObject({ page: 2 });
+      expect(fetchPage.mock.calls[1][0]).toMatchObject({ page: 51, per_page: 1 });
     });
 
     it('defensively flags when the lookahead probe throws', async () => {
