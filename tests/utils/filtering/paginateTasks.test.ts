@@ -50,6 +50,74 @@ describe('fetchTaskPages', () => {
     });
   });
 
+  describe('server-cap truncation detection (lookahead)', () => {
+    // The bug the reviewer reproduced: prepareQueryParameters inflates a missing
+    // per_page to 1000, but the server caps a page at ~50. `50 >= 1000` is false,
+    // so the naive check misses the truncation. The lookahead keys off the
+    // server's REAL cap instead.
+    it('flags possiblyTruncated via lookahead when an inflated per_page hides a server cap', async () => {
+      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
+        // page 1: server caps the inflated per_page:1000 down to 50
+        .mockResolvedValueOnce(makeTasks(50, 0))
+        // page+1 lookahead (per_page:1): a real next item exists → more to fetch
+        .mockResolvedValueOnce(makeTasks(1, 50));
+
+      const result = await fetchTaskPages(fetchPage, { page: 1, per_page: 1000 }, false);
+
+      expect(fetchPage).toHaveBeenCalledTimes(2);
+      // The lookahead is a minimal next-page probe.
+      expect(fetchPage.mock.calls[1][0]).toMatchObject({ page: 2, per_page: 1 });
+      expect(result.paginationMode).toBe('single-page');
+      expect(result.pagesFetched).toBe(1); // pagesFetched counts the data page, not the probe
+      expect(result.tasks).toHaveLength(50);
+      expect(result.possiblyTruncated).toBe(true);
+    });
+
+    it('does NOT flag when a cap-sized page is actually the whole result (lookahead empty)', async () => {
+      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
+        .mockResolvedValueOnce(makeTasks(50, 0))
+        .mockResolvedValueOnce([]); // no next item → exactly 50 total
+
+      const result = await fetchTaskPages(fetchPage, { page: 1, per_page: 1000 }, false);
+
+      expect(fetchPage).toHaveBeenCalledTimes(2);
+      expect(result.possiblyTruncated).toBeUndefined();
+    });
+
+    it('covers an explicit perPage larger than the server cap', async () => {
+      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
+        .mockResolvedValueOnce(makeTasks(50, 0)) // asked 200, server capped to 50
+        .mockResolvedValueOnce(makeTasks(1, 50));
+
+      const result = await fetchTaskPages(fetchPage, { per_page: 200 }, false);
+
+      expect(fetchPage).toHaveBeenCalledTimes(2);
+      expect(result.possiblyTruncated).toBe(true);
+    });
+
+    it('skips the lookahead for a small page below the cap threshold', async () => {
+      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
+        .mockResolvedValue(makeTasks(30, 0));
+
+      const result = await fetchTaskPages(fetchPage, { per_page: 1000 }, false);
+
+      // 30 < 50 → almost certainly the whole result → no extra round-trip
+      expect(fetchPage).toHaveBeenCalledTimes(1);
+      expect(result.possiblyTruncated).toBeUndefined();
+    });
+
+    it('defensively flags when the lookahead probe throws', async () => {
+      const fetchPage = jest.fn<(p: GetTasksParams) => Promise<Task[]>>()
+        .mockResolvedValueOnce(makeTasks(50, 0))
+        .mockRejectedValueOnce(new Error('probe failed'));
+
+      const result = await fetchTaskPages(fetchPage, { per_page: 1000 }, false);
+
+      // A failed probe must keep the result loudly non-silent, not falsely complete.
+      expect(result.possiblyTruncated).toBe(true);
+    });
+  });
+
   describe('auto-paginate contract', () => {
     it('loops pages until a short page and returns ALL tasks (>50)', async () => {
       // Server caps each page at 50; total of 120 across three pages.

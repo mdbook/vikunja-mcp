@@ -8,8 +8,11 @@
  * This helper centralises two contracts used by every task-listing strategy:
  *
  *   - **single-page** (default): fetch exactly one page, honouring the caller's
- *     `page` / `per_page`. Preserves prior behaviour. When the page comes back
- *     completely full we flag `possiblyTruncated` so callers know more may exist.
+ *     `page` / `per_page`. Preserves prior behaviour. When the page might have
+ *     been capped by the server we flag `possiblyTruncated` so callers know more
+ *     may exist — see the lookahead logic below (the flag must key off the
+ *     server's REAL cap, not the requested `per_page`, which the caller may have
+ *     inflated well past the cap).
  *   - **auto-paginate** (opt-in via `autoPaginate`): loop pages until the server
  *     returns a short or empty page, accumulating every match. This is the
  *     escape hatch for "give me everything" sweeps that must never truncate.
@@ -26,6 +29,14 @@ export const AUTO_PAGE_REQUEST_SIZE = 250;
 /** Hard safety cap on how many pages a single auto-paginate sweep will fetch,
  *  so a misbehaving/looping server can never cause an unbounded fetch. */
 export const MAX_AUTO_PAGES = 100;
+
+/** Single-page result sizes at/above this get a page+1 lookahead to check for
+ *  truncation. Vikunja's default MaxItemsPerPage is 50, so a page smaller than
+ *  this is almost certainly the whole result (not a server-capped page) and
+ *  needs no extra round-trip; a page this size or larger might be capped and is
+ *  worth one cheap verification. Correctness never depends on this value — it
+ *  only decides WHEN to spend the lookahead call. */
+export const LOOKAHEAD_THRESHOLD = 50;
 
 export interface PaginationOutcome {
   tasks: Task[];
@@ -54,11 +65,7 @@ export async function fetchTaskPages(
 ): Promise<PaginationOutcome> {
   if (!autoPaginate) {
     const tasks = (await fetchPage(baseParams)) ?? [];
-    // If the caller asked for a bounded page and we filled it exactly, more
-    // tasks likely exist beyond this page — surface that so it isn't silent.
-    const requested = baseParams.per_page;
-    const possiblyTruncated =
-      typeof requested === 'number' && requested > 0 && tasks.length >= requested;
+    const possiblyTruncated = await detectTruncation(fetchPage, baseParams, tasks);
     return {
       tasks,
       paginationMode: 'single-page',
@@ -112,4 +119,59 @@ export async function fetchTaskPages(
     paginationMode: 'auto',
     pagesFetched,
   };
+}
+
+/**
+ * Decide whether a single-page result was (likely) truncated by the server.
+ *
+ * The naive `tasks.length >= requested per_page` check is WRONG for the case
+ * that matters most: `prepareQueryParameters` inflates a missing `per_page` to
+ * 1000, but Vikunja caps a page at MaxItemsPerPage (~50). So a >50 result comes
+ * back as 50 while `requested` is 1000 — `50 >= 1000` is false and the
+ * truncation goes unflagged (the exact bug the reviewer reproduced live).
+ *
+ * Instead we key off the SERVER's real cap without needing to know it:
+ *   1. If the caller set a real `per_page` and the page filled it exactly, more
+ *      may exist → truncated (no extra request needed).
+ *   2. Otherwise, if the page is large enough to *possibly* be a server cap
+ *      (>= LOOKAHEAD_THRESHOLD), do ONE cheap page+1 lookahead (per_page: 1). A
+ *      non-empty next page proves there is more → truncated. This is
+ *      server-cap-agnostic and does not depend on pagination headers (which
+ *      node-vikunja's request() does not expose).
+ *   3. A small page (< LOOKAHEAD_THRESHOLD) is almost certainly the whole result
+ *      → not truncated, and we skip the extra round-trip.
+ */
+async function detectTruncation(
+  fetchPage: (params: GetTasksParams) => Promise<Task[] | undefined>,
+  baseParams: GetTasksParams,
+  tasks: Task[],
+): Promise<boolean> {
+  if (tasks.length === 0) {
+    return false;
+  }
+
+  // Case 1: the caller's own page size was filled exactly.
+  const requested = baseParams.per_page;
+  if (typeof requested === 'number' && requested > 0 && tasks.length >= requested) {
+    return true;
+  }
+
+  // Case 3: too small to be a server-capped page — no lookahead needed.
+  if (tasks.length < LOOKAHEAD_THRESHOLD) {
+    return false;
+  }
+
+  // Case 2: possibly capped — verify with a minimal next-page lookahead.
+  const nextPage = (baseParams.page ?? 1) + 1;
+  try {
+    const lookahead = (await fetchPage({ ...baseParams, page: nextPage, per_page: 1 })) ?? [];
+    return lookahead.length > 0;
+  } catch (error) {
+    // A failed lookahead must not fail the list; assume possibly-truncated so
+    // the result stays loudly non-silent rather than falsely "complete".
+    logger.debug('Truncation lookahead failed; flagging possiblyTruncated defensively', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
 }
