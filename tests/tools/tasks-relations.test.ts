@@ -399,6 +399,39 @@ describe('Task Relations Tool', () => {
       expect(markdown).toContain('Found 0 relations for task 1');
     });
 
+    it('should count + group relations when the API returns the MAP shape', async () => {
+      // Live Vikunja returns related_tasks as a map keyed by relation kind,
+      // each value an array of full related tasks (WITH titles).
+      mockClient.tasks.getTask.mockResolvedValue({
+        id: 1,
+        title: 'Parent',
+        project_id: 1,
+        related_tasks: {
+          subtask: [
+            { id: 2, title: 'Child A' },
+            { id: 3, title: 'Child B' },
+          ],
+          blocking: [{ id: 9, title: 'Blocker' }],
+        },
+      });
+
+      const result = await server.executeTool('vikunja_tasks', {
+        subcommand: 'relations',
+        id: 1,
+      });
+
+      const markdown = (result as any).content[0].text;
+      const parsed = parseMarkdown(markdown);
+      expect(parsed.getAorpStatus().type).toBe('success');
+      // Counts across ALL kinds (was 0 with the old related_tasks.length)
+      expect(markdown).toContain('Found 3 relations for task 1');
+      // Grouped, readable output with kinds + related task titles
+      expect(markdown).toContain('subtask');
+      expect(markdown).toContain('blocking');
+      expect(markdown).toContain('Child A');
+      expect(markdown).toContain('Blocker');
+    });
+
     it('should validate required task ID', async () => {
       await expect(
         server.executeTool('vikunja_tasks', {
