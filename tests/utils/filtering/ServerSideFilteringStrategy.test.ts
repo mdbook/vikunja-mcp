@@ -231,8 +231,39 @@ describe('ServerSideFilteringStrategy', () => {
         serverSideFilteringUsed: true,
         serverSideFilteringAttempted: true,
         clientSideFiltering: false,
-        filteringNote: 'Server-side filtering used (modern Vikunja)'
+        filteringNote: 'Server-side filtering used (modern Vikunja)',
+        paginationMode: 'single-page',
+        pagesFetched: 1
       });
+    });
+  });
+
+  describe('auto-pagination (allTasks)', () => {
+    const makeTasks = (n: number, offset = 0): Task[] =>
+      Array.from({ length: n }, (_, i) => ({ id: offset + i + 1, title: `T${offset + i + 1}` })) as unknown as Task[];
+
+    it('fetches every page and returns all tasks when allTasks is set (>50)', async () => {
+      const params: FilteringParams = {
+        args: { allTasks: true },
+        filterExpression: null,
+        filterString: 'done = false',
+        params: {},
+      };
+
+      mockClient.tasks.getAllTasks
+        .mockResolvedValueOnce(makeTasks(50, 0))
+        .mockResolvedValueOnce(makeTasks(50, 50))
+        .mockResolvedValueOnce(makeTasks(15, 100));
+
+      const result = await strategy.execute(params);
+
+      expect(mockClient.tasks.getAllTasks).toHaveBeenCalledTimes(3);
+      expect(result.tasks).toHaveLength(115);
+      expect(result.metadata.paginationMode).toBe('auto');
+      expect(result.metadata.pagesFetched).toBe(3);
+      // Every page carried the server-side filter
+      expect(mockClient.tasks.getAllTasks.mock.calls[0][0]).toMatchObject({ filter: 'done = false', page: 1 });
+      expect(mockClient.tasks.getAllTasks.mock.calls[2][0]).toMatchObject({ filter: 'done = false', page: 3 });
     });
   });
 

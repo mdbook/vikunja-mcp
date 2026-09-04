@@ -28,6 +28,35 @@ export const commentResponseFormatter = {
   },
 
   /**
+   * Format successful comment update (edit) response
+   */
+  formatUpdateCommentResponse(comment: TaskComment): StandardTaskResponse {
+    return {
+      success: true,
+      operation: 'update',
+      message: 'Comment updated successfully',
+      comment: comment,
+      metadata: {
+        timestamp: new Date().toISOString(),
+      },
+    };
+  },
+
+  /**
+   * Format successful comment delete response
+   */
+  formatDeleteCommentResponse(_taskId: number, commentId: number): StandardTaskResponse {
+    return {
+      success: true,
+      operation: 'delete',
+      message: `Comment ${commentId} deleted successfully`,
+      metadata: {
+        timestamp: new Date().toISOString(),
+      },
+    };
+  },
+
+  /**
    * Format successful comment list response
    */
   formatListCommentsResponse(comments: TaskComment[]): StandardTaskResponse {

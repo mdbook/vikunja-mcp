@@ -93,6 +93,18 @@ export const FilterExecutor = {
         filteringResult.metadata.filteringNote
       );
 
+      // Carry pagination info from the strategy through the rebuilt metadata so
+      // callers can see how the result was paged (and whether it may be truncated).
+      if (filteringResult.metadata.paginationMode !== undefined) {
+        filteringMetadata.paginationMode = filteringResult.metadata.paginationMode;
+      }
+      if (filteringResult.metadata.pagesFetched !== undefined) {
+        filteringMetadata.pagesFetched = filteringResult.metadata.pagesFetched;
+      }
+      if (filteringResult.metadata.possiblyTruncated) {
+        filteringMetadata.possiblyTruncated = true;
+      }
+
       // Build return object, only including defined properties to satisfy exactOptionalPropertyTypes
       const result: TaskFilterExecutionResult = {
         success: true,

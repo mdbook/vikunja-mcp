@@ -26,6 +26,10 @@ export interface FilteringArgs {
   filterId?: string;
   allProjects?: boolean;
   done?: boolean;
+  /** When true, auto-paginate: fetch EVERY matching page instead of a single
+   *  capped page. Prevents a sweep from silently missing tasks beyond the
+   *  server's MaxItemsPerPage cap. */
+  allTasks?: boolean;
 }
 
 /**
@@ -46,6 +50,13 @@ export interface FilteringMetadata {
   serverSideFilteringAttempted: boolean;
   clientSideFiltering: boolean;
   filteringNote: string;
+  /** How tasks were paged: a single capped page or a full auto-paginated sweep. */
+  paginationMode?: 'single-page' | 'auto';
+  /** Number of API pages fetched to build the result. */
+  pagesFetched?: number;
+  /** single-page only: the fetched page was full, so more tasks may exist
+   *  beyond it (re-run with allTasks:true or a larger perPage). */
+  possiblyTruncated?: boolean;
 }
 
 /**

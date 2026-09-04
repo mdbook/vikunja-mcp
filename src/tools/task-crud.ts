@@ -58,9 +58,15 @@ async function listTasks(
     // Type the filtering metadata properly
     const filteringMetadata = metadata;
 
+    // Surface possible truncation in the summary line so a capped sweep is
+    // never silent — the caller should re-run with allTasks:true to be sure.
+    const truncationNote = metadata.possiblyTruncated
+      ? ' (page full — more may exist; pass allTasks:true to fetch all)'
+      : '';
+
     const response = createSuccessResponse(
       'list-tasks',
-      `Found ${tasks.length} tasks${filteringMessage}`,
+      `Found ${tasks.length} tasks${filteringMessage}${truncationNote}`,
       { tasks: tasks as Task[] }, // Convert from node-vikunja Task to our Task interface
       {
         count: tasks.length,
@@ -101,7 +107,12 @@ export function registerTaskCrudTool(
 ): void {
   server.tool(
     'vikunja_task_crud',
-    'Manage individual tasks: create, get, update, delete, list',
+    'Manage individual tasks: create, get, update, delete, list. '
+      + 'Pagination for list: by default one page is returned (honoring page/perPage); '
+      + 'Vikunja caps a page at its server-side MaxItemsPerPage (~50), so a large sweep can be '
+      + 'truncated (response metadata sets possiblyTruncated when a full page comes back). '
+      + 'Pass allTasks:true to auto-paginate and return EVERY matching task (metadata reports '
+      + 'paginationMode:"auto" and pagesFetched).',
     {
       operation: z.enum(['create', 'get', 'update', 'delete', 'list']),
       // Task creation/update fields
@@ -128,6 +139,8 @@ export function registerTaskCrudTool(
       // List specific filters
       allProjects: z.boolean().optional(),
       done: z.boolean().optional(),
+      // Auto-paginate: fetch every matching page instead of a single capped page
+      allTasks: z.boolean().optional(),
       // Session ID for AORP response tracking
       sessionId: z.string().optional(),
     },
