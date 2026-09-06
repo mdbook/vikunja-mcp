@@ -17,6 +17,11 @@ jest.mock('../../src/client', () => ({
 }));
 jest.mock('../../src/auth/AuthManager');
 
+// Mock global fetch — the label `update` case uses a raw POST /labels/:id shim
+// (node-vikunja@0.4.0 updateLabel sends the wrong PUT verb → 405). See #237.
+const mockFetch = jest.fn();
+global.fetch = mockFetch as any;
+
 describe('Labels Tool', () => {
   let mockServer: MockServer;
   let mockAuthManager: MockAuthManager;
@@ -91,6 +96,15 @@ describe('Labels Tool', () => {
     // Mock getClientFromContext and getClientFromContext
     (getClientFromContext as jest.Mock).mockReturnValue(mockClient);
     (getClientFromContext as jest.Mock).mockResolvedValue(mockClient);
+
+    // Session used by the raw-fetch shim in the `update` case
+    mockAuthManager.getSession.mockReturnValue({
+      apiUrl: 'https://api.vikunja.test',
+      apiToken: 'test-token',
+    });
+
+    // Reset fetch mock between tests
+    mockFetch.mockReset();
 
     // Mock server
     mockServer = {
@@ -379,13 +393,16 @@ describe('Labels Tool', () => {
       ).rejects.toThrow('At least one field to update is required');
     });
 
-    it('should update a label with partial fields', async () => {
+    it('should update a label with partial fields via POST /labels/:id', async () => {
       const mockLabel = {
         id: 1,
         title: 'Updated Label',
         hex_color: '#00ff00',
       };
-      mockClient.labels.updateLabel.mockResolvedValue(mockLabel);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockLabel,
+      });
 
       const result = await mockHandler({
         subcommand: 'update',
@@ -393,9 +410,19 @@ describe('Labels Tool', () => {
         title: 'Updated Label',
       });
 
-      expect(mockClient.labels.updateLabel).toHaveBeenCalledWith(1, {
-        title: 'Updated Label',
-      });
+      // Regression guard for #237: update must POST (not PUT) to the item endpoint
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.vikunja.test/labels/1',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer test-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ title: 'Updated Label' }),
+        }),
+      );
+      expect(mockClient.labels.updateLabel).not.toHaveBeenCalled();
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
       expect(markdown).toContain("## ✅ Success");
@@ -410,7 +437,10 @@ describe('Labels Tool', () => {
         description: 'New description',
         hex_color: '#0000ff',
       };
-      mockClient.labels.updateLabel.mockResolvedValue(mockLabel);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockLabel,
+      });
 
       const result = await mockHandler({
         subcommand: 'update',
@@ -420,11 +450,17 @@ describe('Labels Tool', () => {
         hexColor: '#0000ff',
       });
 
-      expect(mockClient.labels.updateLabel).toHaveBeenCalledWith(1, {
-        title: 'Complete Update',
-        description: 'New description',
-        hex_color: '#0000ff',
-      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.vikunja.test/labels/1',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            title: 'Complete Update',
+            description: 'New description',
+            hex_color: '#0000ff',
+          }),
+        }),
+      );
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
       expect(markdown).toContain("## ✅ Success");
@@ -438,7 +474,10 @@ describe('Labels Tool', () => {
         title: 'Label',
         description: '',
       };
-      mockClient.labels.updateLabel.mockResolvedValue(mockLabel);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockLabel,
+      });
 
       const result = await mockHandler({
         subcommand: 'update',
@@ -446,9 +485,13 @@ describe('Labels Tool', () => {
         description: '',
       });
 
-      expect(mockClient.labels.updateLabel).toHaveBeenCalledWith(1, {
-        description: '',
-      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.vikunja.test/labels/1',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ description: '' }),
+        }),
+      );
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
       expect(markdown).toContain("## ✅ Success");
@@ -457,9 +500,11 @@ describe('Labels Tool', () => {
     });
 
     it('should throw API_ERROR for permission errors', async () => {
-      const error = new Error('You do not have permission to perform this action');
-      (error as any).statusCode = 403;
-      mockClient.labels.updateLabel.mockRejectedValue(error);
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        statusText: 'Forbidden',
+        json: async () => ({ message: 'You do not have permission to perform this action' }),
+      });
 
       await expect(
         mockHandler({
@@ -468,7 +513,27 @@ describe('Labels Tool', () => {
           title: 'Forbidden Update',
         }),
       ).rejects.toThrow(
-        new MCPError(ErrorCode.API_ERROR, 'Failed to update label: You do not have permission to perform this action'),
+        new MCPError(ErrorCode.API_ERROR, 'You do not have permission to perform this action'),
+      );
+    });
+
+    it('should fall back to statusText when error body has no message', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        statusText: 'Method Not Allowed',
+        json: async () => {
+          throw new Error('no body');
+        },
+      });
+
+      await expect(
+        mockHandler({
+          subcommand: 'update',
+          id: 1,
+          title: 'Update',
+        }),
+      ).rejects.toThrow(
+        new MCPError(ErrorCode.API_ERROR, 'Failed to update label: Method Not Allowed'),
       );
     });
   });

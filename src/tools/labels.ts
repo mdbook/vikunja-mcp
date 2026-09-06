@@ -155,7 +155,31 @@ export function registerLabelsTool(server: McpServer, authManager: AuthManager, 
             if (args.description !== undefined) updates.description = args.description;
             if (args.hexColor) updates.hex_color = args.hexColor;
 
-            const label = await client.labels.updateLabel(args.id, updates as Label);
+            // node-vikunja@0.4.0 updateLabel issues PUT /labels/:id, but Vikunja
+            // registers POST /labels/:id for update (no PUT route on the item) → HTTP 405.
+            // Raw POST shim mirrors the fork's other wrong-verb workarounds (see
+            // webhooks.ts update case, teams.ts, export.ts). #237
+            const session = authManager.getSession();
+            const res = await fetch(`${session.apiUrl}/labels/${args.id}`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${session.apiToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(updates),
+            });
+
+            if (!res.ok) {
+              const errorData = (await res.json().catch(() => ({ message: null }))) as {
+                message?: string;
+              };
+              throw new MCPError(
+                ErrorCode.API_ERROR,
+                errorData.message || `Failed to update label: ${res.statusText}`,
+              );
+            }
+
+            const label = (await res.json()) as Label;
 
             const response = createStandardResponse(
               'update-label',
