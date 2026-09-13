@@ -28,6 +28,28 @@ function nonRetryableAuthMessage(prefix: string, error: unknown): string {
 }
 
 /**
+ * Detect a 403/Forbidden error robustly (numeric status, axios-style response.status,
+ * or a "forbidden" message — case-insensitive).
+ *
+ * Confirmed by controlled experiment (2x): `DELETE /tasks/{id}/labels/{labelId}` is
+ * NOT idempotent on Vikunja's side — removing a label that IS currently on the task
+ * returns 200, but removing one that is NOT on the task (already absent) returns 403.
+ * It is not a token-permission problem; it is Vikunja's non-idempotent-delete quirk.
+ * So for `removeLabels`, a 403 means the label is already in the desired end state and
+ * must be treated as a benign no-op, not an error.
+ */
+function isForbiddenError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const errorWithStatus = error as Error & { status?: number; response?: { status?: number } };
+  if (errorWithStatus.status === 403 || errorWithStatus.response?.status === 403) {
+    return true;
+  }
+  return error.message.toLowerCase().includes('forbidden');
+}
+
+/**
  * Applies labels to a task WITHOUT destroying the ones it already has.
  *
  * Two chained bugs made the previous path lose data. Both verified against a live
@@ -208,6 +230,7 @@ export async function removeLabels(args: {
     const labelIds = args.labels;
 
     // Remove labels from the task with retry logic
+    const alreadyAbsent: number[] = [];
     for (const labelId of labelIds) {
       try {
         await withRetry(() => client.tasks.removeLabelFromTask(taskId, labelId), {
@@ -215,6 +238,13 @@ export async function removeLabels(args: {
           shouldRetry: (error: unknown) => isRetryableAuthError(error),
         });
       } catch (removeError) {
+        // Vikunja's DELETE is not idempotent: removing a label that is already absent
+        // returns 403, not a 404/no-op. That is the desired end state already reached —
+        // treat it as success, not an error, and move on to the next label.
+        if (isForbiddenError(removeError)) {
+          alreadyAbsent.push(labelId);
+          continue;
+        }
         // A genuinely retryable auth error (401) was retried and still failed.
         if (isRetryableAuthError(removeError)) {
           throw new MCPError(
@@ -222,8 +252,8 @@ export async function removeLabels(args: {
             `Failed to remove label from task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
           );
         }
-        // A 403 (or any other non-retryable auth error) fails fast — say so honestly
-        // instead of claiming a retry that never happened.
+        // Any other non-retryable auth error fails fast — say so honestly instead of
+        // claiming a retry that never happened.
         if (isAuthenticationError(removeError)) {
           throw new MCPError(
             ErrorCode.API_ERROR,
@@ -237,9 +267,16 @@ export async function removeLabels(args: {
     // Fetch the updated task to show current labels
     const task = await client.tasks.getTask(args.id);
 
+    const allAlreadyAbsent = alreadyAbsent.length === labelIds.length;
+    const successMessage = allAlreadyAbsent
+      ? `Label${labelIds.length > 1 ? 's' : ''} already absent from task (no-op)`
+      : alreadyAbsent.length > 0
+        ? `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully (some were already absent)`
+        : `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully`;
+
     const response = createSimpleResponse(
       'remove-label',
-      `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully`,
+      successMessage,
       { task },
       { metadata: { affectedFields: ['labels'] } }
     );
