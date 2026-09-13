@@ -6,10 +6,26 @@ import type { MinimalTask } from '../../types';
 import { MCPError, ErrorCode } from '../../types';
 import { getClientFromContext } from '../../client';
 import type { VikunjaClient } from 'node-vikunja';
-import { isAuthenticationError } from '../../utils/auth-error-handler';
+import { isAuthenticationError, isRetryableAuthError } from '../../utils/auth-error-handler';
 import { withRetry, RETRY_CONFIG } from '../../utils/retry';
 import { validateId } from './validation';
 import { createSimpleResponse, formatAorpAsMarkdown } from '../../utils/response-factory';
+
+/**
+ * Build an honest error message for a non-retryable auth error (typically 403 — a
+ * permanent permission denial, as opposed to a 401 that a retry might clear).
+ * Includes the real HTTP status when the error carries one, instead of the previous
+ * blanket "(Retried N times)" message, which lied about a 403 that was never retried.
+ */
+function nonRetryableAuthMessage(prefix: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const errorWithStatus = error as { status?: number; response?: { status?: number } };
+  const status = errorWithStatus?.status ?? errorWithStatus?.response?.status;
+  const statusNote = status
+    ? `HTTP ${status} — the Vikunja service token likely lacks permission for this operation`
+    : 'the Vikunja service token likely lacks permission for this operation';
+  return `${prefix}: ${message} (${statusNote})`;
+}
 
 /**
  * Applies labels to a task WITHOUT destroying the ones it already has.
@@ -72,7 +88,7 @@ export async function addLabelsToTaskAdditive(
         }),
       {
         ...RETRY_CONFIG.AUTH_ERRORS,
-        shouldRetry: (error: unknown) => isAuthenticationError(error),
+        shouldRetry: (error: unknown) => isRetryableAuthError(error),
       },
     );
   }
@@ -120,11 +136,19 @@ export async function applyLabels(args: {
       await addLabelsToTaskAdditive(client, taskId, labelIds, {
       });
     } catch (labelError) {
-      // Check if it's an auth error after retries
-      if (isAuthenticationError(labelError)) {
+      // A genuinely retryable auth error (401) was retried and still failed.
+      if (isRetryableAuthError(labelError)) {
         throw new MCPError(
           ErrorCode.API_ERROR,
           `Failed to apply label to task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+        );
+      }
+      // A 403 (or any other non-retryable auth error) fails fast — say so honestly
+      // instead of claiming a retry that never happened.
+      if (isAuthenticationError(labelError)) {
+        throw new MCPError(
+          ErrorCode.API_ERROR,
+          nonRetryableAuthMessage('Failed to apply label to task', labelError),
         );
       }
       throw labelError;
@@ -188,14 +212,22 @@ export async function removeLabels(args: {
       try {
         await withRetry(() => client.tasks.removeLabelFromTask(taskId, labelId), {
           ...RETRY_CONFIG.AUTH_ERRORS,
-          shouldRetry: (error: unknown) => isAuthenticationError(error),
+          shouldRetry: (error: unknown) => isRetryableAuthError(error),
         });
       } catch (removeError) {
-        // Check if it's an auth error after retries
-        if (isAuthenticationError(removeError)) {
+        // A genuinely retryable auth error (401) was retried and still failed.
+        if (isRetryableAuthError(removeError)) {
           throw new MCPError(
             ErrorCode.API_ERROR,
             `Failed to remove label from task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+          );
+        }
+        // A 403 (or any other non-retryable auth error) fails fast — say so honestly
+        // instead of claiming a retry that never happened.
+        if (isAuthenticationError(removeError)) {
+          throw new MCPError(
+            ErrorCode.API_ERROR,
+            nonRetryableAuthMessage('Failed to remove label from task', removeError),
           );
         }
         throw removeError;

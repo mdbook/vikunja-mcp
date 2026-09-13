@@ -106,7 +106,7 @@ export type { AorpBuilderConfig, AorpFactoryResult } from './types';
 
 // Core utilities that are widely used across the codebase
 export { logger } from './utils/logger';
-export { isAuthenticationError } from './utils/auth-error-handler';
+export { isAuthenticationError, isRetryableAuthError } from './utils/auth-error-handler';
 export { withRetry, RETRY_CONFIG } from './utils/retry';
 export { transformApiError, handleFetchError, handleStatusCodeError } from './utils/error-handler';
 export { parseFilterString } from './utils/filters';

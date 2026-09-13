@@ -3,7 +3,7 @@
  * Uses BulkOperationValidator + shared batch processor helpers.
  */
 
-import { MCPError, ErrorCode, createStandardResponse, getClientFromContext, logger, isAuthenticationError, transformApiError, handleFetchError } from '../../index';
+import { MCPError, ErrorCode, createStandardResponse, getClientFromContext, logger, isAuthenticationError, isRetryableAuthError, transformApiError, handleFetchError } from '../../index';
 import type { Assignee } from '../../types';
 import { withRetry, isRetryableError, RETRY_CONFIG, type RetryOptions } from '../../utils/retry';
 import { addLabelsToTaskAdditive } from './labels';
@@ -140,7 +140,7 @@ export async function bulkUpdateTasks(args: BulkUpdateArgs): Promise<{ content: 
           }
         }
         for (const userId of toRemove) {
-          try { await withRetry(() => client.tasks.removeUserFromTask(taskId, userId), { ...RETRY_CONFIG.AUTH_ERRORS, shouldRetry: isAuthenticationError }); }
+          try { await withRetry(() => client.tasks.removeUserFromTask(taskId, userId), { ...RETRY_CONFIG.AUTH_ERRORS, shouldRetry: isRetryableAuthError }); }
           catch (e) { if (isAuthenticationError(e)) throw new MCPError(ErrorCode.API_ERROR, `${AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE_PARTIAL} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`); throw e; }
         }
       }

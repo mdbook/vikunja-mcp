@@ -67,6 +67,41 @@ export function isAuthenticationError(error: unknown): boolean {
 }
 
 /**
+ * Check if an error is a RETRYABLE authentication error — i.e. a 401.
+ *
+ * `isAuthenticationError` above treats 401 and 403 the same for messaging/classification
+ * purposes, but they are NOT the same for retry purposes: a 401 can mean a token needs
+ * refreshing (worth a retry), while a 403 is a permanent permission denial (the token is
+ * valid but not allowed to do this) — retrying it just hammers the breaker for nothing.
+ * Use this (not `isAuthenticationError`) to gate `shouldRetry` on auth-flavored operations.
+ */
+export function isRetryableAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const errorWithStatus = error as Error & { status?: number; response?: { status?: number } };
+
+  if (errorWithStatus.status === 401) {
+    return true;
+  }
+
+  if (errorWithStatus.response?.status === 401) {
+    return true;
+  }
+
+  const errorMessage = error.message.toLowerCase();
+  const normalizedMessage = errorMessage.trim();
+
+  const retryableAuthErrorPatterns = [
+    /^401\b/,                   // HTTP status at start of message
+    /\berror:\s*401\b/i,          // "Error: 401" pattern
+  ];
+
+  return retryableAuthErrorPatterns.some(pattern => pattern.test(normalizedMessage));
+}
+
+/**
  * Check if an error is specifically a JWT expiration error using precise pattern matching
  * This replaces unsafe substring matching to prevent false positives
  */

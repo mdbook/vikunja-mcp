@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@jest/globals';
 import {
   isAuthenticationError,
+  isRetryableAuthError,
   isJWTExpiredError,
   createAuthErrorMessage,
   handleAuthError,
@@ -139,6 +140,50 @@ describe('Auth Error Handler', () => {
       expect(isAuthenticationError(null)).toBe(false);
       expect(isAuthenticationError(undefined)).toBe(false);
       expect(isAuthenticationError({})).toBe(false);
+    });
+  });
+
+  describe('isRetryableAuthError', () => {
+    it('should return true for a 401 (structured status)', () => {
+      const error401 = new Error('Unauthorized') as Error & { status: number };
+      error401.status = 401;
+      expect(isRetryableAuthError(error401)).toBe(true);
+    });
+
+    it('should return true for a 401 (axios-style response.status)', () => {
+      const axiosError = new Error('Request failed') as Error & { response: { status: number } };
+      axiosError.response = { status: 401 };
+      expect(isRetryableAuthError(axiosError)).toBe(true);
+    });
+
+    it('should return true for a 401 at the start of the message', () => {
+      expect(isRetryableAuthError(new Error('401 Unauthorized'))).toBe(true);
+      expect(isRetryableAuthError(new Error('Error: 401 details'))).toBe(true);
+    });
+
+    it('should return FALSE for a 403 (structured status) — a 403 is a permanent permission denial, not retryable', () => {
+      const error403 = new Error('Forbidden') as Error & { status: number };
+      error403.status = 403;
+      expect(isRetryableAuthError(error403)).toBe(false);
+    });
+
+    it('should return FALSE for a 403 (axios-style response.status)', () => {
+      const axiosForbidden = new Error('Access denied') as Error & { response: { status: number } };
+      axiosForbidden.response = { status: 403 };
+      expect(isRetryableAuthError(axiosForbidden)).toBe(false);
+    });
+
+    it('should return FALSE for a 403 message pattern', () => {
+      expect(isRetryableAuthError(new Error('403 Forbidden'))).toBe(false);
+      expect(isRetryableAuthError(new Error('Error: 403 forbidden'))).toBe(false);
+    });
+
+    it('should return false for non-auth errors and non-Error values', () => {
+      expect(isRetryableAuthError(new Error('Network timeout'))).toBe(false);
+      expect(isRetryableAuthError('string error')).toBe(false);
+      expect(isRetryableAuthError(null)).toBe(false);
+      expect(isRetryableAuthError(undefined)).toBe(false);
+      expect(isRetryableAuthError({})).toBe(false);
     });
   });
 
