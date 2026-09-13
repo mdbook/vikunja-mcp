@@ -10,8 +10,8 @@ import {
 } from '../../../src/tools/tasks/assignees/AssigneeOperationsService';
 import { getClientFromContext } from '../../../src/client';
 import { MCPError, ErrorCode } from '../../../src/types';
-import { isAuthenticationError } from '../../../src/utils/auth-error-handler';
-import { withRetry } from '../../../src/utils/retry';
+import { isAuthenticationError, isRetryableAuthError } from '../../../src/utils/auth-error-handler';
+import { withRetry, getHttpStatus } from '../../../src/utils/retry';
 import { parseMarkdown } from '../../utils/markdown';
 
 jest.mock('../../../src/client');
@@ -40,6 +40,7 @@ describe('Assignee operations', () => {
     jest.clearAllMocks();
     (getClientFromContext as jest.Mock).mockResolvedValue(mockClient);
     (isAuthenticationError as jest.Mock).mockReturnValue(false);
+    (isRetryableAuthError as jest.Mock).mockReturnValue(false);
     (withRetry as jest.Mock).mockImplementation((fn) => fn());
   });
 
@@ -142,15 +143,36 @@ describe('Assignee operations', () => {
       );
     });
 
-    it('should handle authentication errors with retry', async () => {
+    it('should handle authentication errors with retry (401 — retryable, retried and exhausted)', async () => {
       mockClient.tasks.getTask.mockResolvedValue({ id: 123, title: 'T', assignees: [] });
       const authError = new Error('Authentication failed');
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
+      (isRetryableAuthError as jest.Mock).mockReturnValue(true);
       (withRetry as jest.Mock).mockRejectedValue(authError);
 
       await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.toThrow(
         'Failed to assign users to task: Assignee operations may have authentication issues with certain Vikunja API versions. This is a known limitation that prevents assigning users to tasks. (Retried 3 times)'
       );
+    });
+
+    it('should fail fast with an honest message for a non-retryable auth error (403 — permanent permission denial)', async () => {
+      mockClient.tasks.getTask.mockResolvedValue({ id: 123, title: 'T', assignees: [] });
+      // .statusCode is the shape real node-vikunja errors actually carry the status on
+      // (not bare .status) — see auth-error-handler.ts's isRetryableAuthError doc.
+      const forbidden = new Error('Forbidden') as Error & { statusCode: number };
+      forbidden.statusCode = 403;
+      (isAuthenticationError as jest.Mock).mockReturnValue(true);
+      (isRetryableAuthError as jest.Mock).mockReturnValue(false);
+      (withRetry as jest.Mock).mockRejectedValue(forbidden);
+      // getHttpStatus (from retry.ts, auto-mocked in this file) backs the honest
+      // "HTTP <status>" message; wire it to reflect the injected error's real status.
+      (getHttpStatus as jest.Mock).mockReturnValue(403);
+
+      await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.toThrow(
+        /Assignee operations may have authentication issues.*Forbidden.*HTTP 403/s
+      );
+      // Must NOT claim a retry that never happened.
+      await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.not.toThrow(/Retried/);
     });
 
     it('should handle non-authentication API errors', async () => {
@@ -235,14 +257,29 @@ describe('Assignee operations', () => {
       );
     });
 
-    it('should handle authentication errors during removal', async () => {
+    it('should handle authentication errors during removal (401 — retryable, retried and exhausted)', async () => {
       const authError = new Error('Authentication failed');
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
+      (isRetryableAuthError as jest.Mock).mockReturnValue(true);
       (withRetry as jest.Mock).mockRejectedValue(authError);
 
       await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.toThrow(
         'Failed to remove users from task: Assignee removal operations may have authentication issues with certain Vikunja API versions. This is a known limitation that prevents removing users from tasks. (Retried 3 times)'
       );
+    });
+
+    it('should fail fast with an honest message during removal for a non-retryable auth error (403)', async () => {
+      const forbidden = new Error('Forbidden') as Error & { statusCode: number };
+      forbidden.statusCode = 403;
+      (isAuthenticationError as jest.Mock).mockReturnValue(true);
+      (isRetryableAuthError as jest.Mock).mockReturnValue(false);
+      (withRetry as jest.Mock).mockRejectedValue(forbidden);
+      (getHttpStatus as jest.Mock).mockReturnValue(403);
+
+      await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.toThrow(
+        /Assignee removal operations may have authentication issues.*Forbidden.*HTTP 403/s
+      );
+      await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.not.toThrow(/Retried/);
     });
 
     it('should handle non-authentication errors during removal', async () => {

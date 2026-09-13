@@ -6,10 +6,53 @@ import type { MinimalTask } from '../../types';
 import { MCPError, ErrorCode } from '../../types';
 import { getClientFromContext } from '../../client';
 import type { VikunjaClient } from 'node-vikunja';
-import { isAuthenticationError } from '../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../utils/retry';
+import { isAuthenticationError, isRetryableAuthError } from '../../utils/auth-error-handler';
+import { withRetry, RETRY_CONFIG, getHttpStatus } from '../../utils/retry';
 import { validateId } from './validation';
 import { createSimpleResponse, formatAorpAsMarkdown } from '../../utils/response-factory';
+
+/**
+ * Build an honest error message for a non-retryable auth error (typically 403 — a
+ * permanent permission denial, as opposed to a 401 that a retry might clear).
+ * Includes the real HTTP status when the error carries one, instead of the previous
+ * blanket "(Retried N times)" message, which lied about a 403 that was never retried.
+ */
+function nonRetryableAuthMessage(prefix: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = getHttpStatus(error);
+  const statusNote = status
+    ? `HTTP ${status} — the Vikunja service token likely lacks permission for this operation`
+    : 'the Vikunja service token likely lacks permission for this operation';
+  return `${prefix}: ${message} (${statusNote})`;
+}
+
+/**
+ * Detect a 403/Forbidden error robustly.
+ *
+ * Primary detection is `getHttpStatus` (checks `.statusCode` first — the property real
+ * node-vikunja errors like `LabelAuthenticationError` actually carry the HTTP status on;
+ * `.status`/`.response.status` are fallbacks for other error shapes). A case-insensitive
+ * "forbidden" message match is kept as a belt-and-suspenders fallback for error shapes
+ * with no structured status at all — NOT the primary signal, since node-vikunja wraps a
+ * 403 in a message like "Label operation failed due to authentication issue. Original
+ * error: <body>", which may not contain the word "forbidden" at all.
+ *
+ * Confirmed by controlled experiment (2x): `DELETE /tasks/{id}/labels/{labelId}` is
+ * NOT idempotent on Vikunja's side — removing a label that IS currently on the task
+ * returns 200, but removing one that is NOT on the task (already absent) returns 403.
+ * It is not a token-permission problem; it is Vikunja's non-idempotent-delete quirk.
+ * So for `removeLabels`, a 403 means the label is already in the desired end state and
+ * must be treated as a benign no-op, not an error.
+ */
+function isForbiddenError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (getHttpStatus(error) === 403) {
+    return true;
+  }
+  return error.message.toLowerCase().includes('forbidden');
+}
 
 /**
  * Applies labels to a task WITHOUT destroying the ones it already has.
@@ -72,7 +115,7 @@ export async function addLabelsToTaskAdditive(
         }),
       {
         ...RETRY_CONFIG.AUTH_ERRORS,
-        shouldRetry: (error: unknown) => isAuthenticationError(error),
+        shouldRetry: (error: unknown) => isRetryableAuthError(error),
       },
     );
   }
@@ -120,11 +163,19 @@ export async function applyLabels(args: {
       await addLabelsToTaskAdditive(client, taskId, labelIds, {
       });
     } catch (labelError) {
-      // Check if it's an auth error after retries
-      if (isAuthenticationError(labelError)) {
+      // A genuinely retryable auth error (401) was retried and still failed.
+      if (isRetryableAuthError(labelError)) {
         throw new MCPError(
           ErrorCode.API_ERROR,
           `Failed to apply label to task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+        );
+      }
+      // A 403 (or any other non-retryable auth error) fails fast — say so honestly
+      // instead of claiming a retry that never happened.
+      if (isAuthenticationError(labelError)) {
+        throw new MCPError(
+          ErrorCode.API_ERROR,
+          nonRetryableAuthMessage('Failed to apply label to task', labelError),
         );
       }
       throw labelError;
@@ -184,18 +235,50 @@ export async function removeLabels(args: {
     const labelIds = args.labels;
 
     // Remove labels from the task with retry logic
+    const alreadyAbsent: number[] = [];
     for (const labelId of labelIds) {
       try {
         await withRetry(() => client.tasks.removeLabelFromTask(taskId, labelId), {
           ...RETRY_CONFIG.AUTH_ERRORS,
-          shouldRetry: (error: unknown) => isAuthenticationError(error),
+          shouldRetry: (error: unknown) => isRetryableAuthError(error),
         });
       } catch (removeError) {
-        // Check if it's an auth error after retries
-        if (isAuthenticationError(removeError)) {
+        // Vikunja's DELETE is not idempotent: removing a label that is already absent
+        // returns 403, not a 404/no-op. That is the desired end state already reached —
+        // treat it as success, not an error, and move on to the next label.
+        //
+        // Caveats, read before touching this:
+        // (a) This also masks a GENUINE permission 403 (token actually lacking
+        //     labels-delete scope) — we cannot tell the two apart from the response
+        //     alone. Swallowing it here relies on the verified invariant that the
+        //     service token has full labels-delete scope; if that ever regresses,
+        //     remove-label will silently no-op instead of erroring loudly.
+        // (b) No opossum errorFilter is configured on the shared `vikunja-auth-connect`
+        //     breaker (deliberately — see the builder brief: don't redesign the
+        //     breaker), so a swallowed 403 still counts as ONE failure against it before
+        //     we catch and ignore it. A burst of 5+ already-absent-label removals in a
+        //     short window (opossum's default volumeThreshold) could still trip the
+        //     breaker open even though every one of them was a benign no-op. If that is
+        //     ever observed in practice, the fix is an errorFilter (or
+        //     enableCircuitBreaker: false) on this specific call — not a change to the
+        //     shared breaker's general behavior.
+        if (isForbiddenError(removeError)) {
+          alreadyAbsent.push(labelId);
+          continue;
+        }
+        // A genuinely retryable auth error (401) was retried and still failed.
+        if (isRetryableAuthError(removeError)) {
           throw new MCPError(
             ErrorCode.API_ERROR,
             `Failed to remove label from task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+          );
+        }
+        // Any other non-retryable auth error fails fast — say so honestly instead of
+        // claiming a retry that never happened.
+        if (isAuthenticationError(removeError)) {
+          throw new MCPError(
+            ErrorCode.API_ERROR,
+            nonRetryableAuthMessage('Failed to remove label from task', removeError),
           );
         }
         throw removeError;
@@ -205,9 +288,16 @@ export async function removeLabels(args: {
     // Fetch the updated task to show current labels
     const task = await client.tasks.getTask(args.id);
 
+    const allAlreadyAbsent = alreadyAbsent.length === labelIds.length;
+    const successMessage = allAlreadyAbsent
+      ? `Label${labelIds.length > 1 ? 's' : ''} already absent from task (no-op)`
+      : alreadyAbsent.length > 0
+        ? `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully (some were already absent)`
+        : `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully`;
+
     const response = createSimpleResponse(
       'remove-label',
-      `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully`,
+      successMessage,
       { task },
       { metadata: { affectedFields: ['labels'] } }
     );

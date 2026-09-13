@@ -7,9 +7,24 @@ import type { MinimalTask, TaskWithAssignees, Assignee } from '../../../types';
 import { MCPError, ErrorCode } from '../../../types';
 import { getClientFromContext } from '../../../client';
 import type { VikunjaClient } from 'node-vikunja';
-import { isAuthenticationError } from '../../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../../utils/retry';
+import { isAuthenticationError, isRetryableAuthError } from '../../../utils/auth-error-handler';
+import { withRetry, RETRY_CONFIG, getHttpStatus } from '../../../utils/retry';
 import { AUTH_ERROR_MESSAGES } from '../constants';
+
+/**
+ * Build an honest error message for a non-retryable auth error (typically 403 — a
+ * permanent permission denial, as opposed to a 401 that a retry might clear). Parallel
+ * to the same helper in `../labels.ts`. Status via `getHttpStatus` (`.statusCode` first —
+ * the property real node-vikunja errors carry it on, not `.status`/`.response.status`).
+ */
+function nonRetryableAuthMessage(prefix: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = getHttpStatus(error);
+  const statusNote = status
+    ? `HTTP ${status} — the Vikunja service token likely lacks permission for this operation`
+    : 'the Vikunja service token likely lacks permission for this operation';
+  return `${prefix}: ${message} (${statusNote})`;
+}
 
 /**
  * Adds assignees to a task WITHOUT replacing the ones it already has.
@@ -49,7 +64,7 @@ export async function addAssigneesToTaskAdditive(
       () => Promise.resolve(client.tasks.assignUserToTask(taskId, userId)),
       {
         ...RETRY_CONFIG.AUTH_ERRORS,
-        shouldRetry: (error: unknown) => isAuthenticationError(error),
+        shouldRetry: (error: unknown) => isRetryableAuthError(error),
       },
     );
   }
@@ -85,10 +100,16 @@ export const AssigneeOperationsService = {
     try {
       await addAssigneesToTaskAdditive(client, taskId, assigneeIds);
     } catch (assigneeError) {
-      if (isAuthenticationError(assigneeError)) {
+      if (isRetryableAuthError(assigneeError)) {
         throw new MCPError(
           ErrorCode.API_ERROR,
           `${AUTH_ERROR_MESSAGES.ASSIGNEE_ASSIGN} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+        );
+      }
+      if (isAuthenticationError(assigneeError)) {
+        throw new MCPError(
+          ErrorCode.API_ERROR,
+          nonRetryableAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_ASSIGN, assigneeError),
         );
       }
       throw assigneeError;
@@ -108,15 +129,22 @@ export const AssigneeOperationsService = {
           () => client.tasks.removeUserFromTask(taskId, userId),
           {
             ...RETRY_CONFIG.AUTH_ERRORS,
-            shouldRetry: (error) => isAuthenticationError(error),
+            shouldRetry: (error) => isRetryableAuthError(error),
           },
         );
       } catch (removeError) {
-        // Check if it's an auth error after retries
-        if (isAuthenticationError(removeError)) {
+        // A genuinely retryable auth error (401) was retried and still failed.
+        if (isRetryableAuthError(removeError)) {
           throw new MCPError(
             ErrorCode.API_ERROR,
             `${AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+          );
+        }
+        // A 403 (or any other non-retryable auth error) fails fast — say so honestly.
+        if (isAuthenticationError(removeError)) {
+          throw new MCPError(
+            ErrorCode.API_ERROR,
+            nonRetryableAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE, removeError),
           );
         }
         throw removeError;

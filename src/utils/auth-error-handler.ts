@@ -5,6 +5,7 @@
 
 import { MCPError, ErrorCode } from '../types';
 import { logger } from './logger';
+import { getHttpStatus } from './retry';
 
 /**
  * Check if an error is authentication-related using structured error classification
@@ -64,6 +65,41 @@ export function isAuthenticationError(error: unknown): boolean {
   ];
   
   return authErrorPatterns.some(pattern => pattern.test(normalizedMessage));
+}
+
+/**
+ * Check if an error is a RETRYABLE authentication error — i.e. a 401.
+ *
+ * `isAuthenticationError` above treats 401 and 403 the same for messaging/classification
+ * purposes, but they are NOT the same for retry purposes: a 401 can mean a token needs
+ * refreshing (worth a retry), while a 403 is a permanent permission denial (the token is
+ * valid but not allowed to do this) — retrying it just hammers the breaker for nothing.
+ * Use this (not `isAuthenticationError`) to gate `shouldRetry` on auth-flavored operations.
+ *
+ * Status detection is via `getHttpStatus` (checks `.statusCode` first, then `.status`,
+ * then `.response.status`) — real node-vikunja errors (e.g. `LabelAuthenticationError`)
+ * carry the HTTP status on `.statusCode`; their `.response` is the JSON response BODY
+ * (`{message, code}`), not `{status}`. A message-pattern fallback is kept belt-and-suspenders
+ * for error shapes that don't carry a structured status at all.
+ */
+export function isRetryableAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (getHttpStatus(error) === 401) {
+    return true;
+  }
+
+  const errorMessage = error.message.toLowerCase();
+  const normalizedMessage = errorMessage.trim();
+
+  const retryableAuthErrorPatterns = [
+    /^401\b/,                   // HTTP status at start of message
+    /\berror:\s*401\b/i,          // "Error: 401" pattern
+  ];
+
+  return retryableAuthErrorPatterns.some(pattern => pattern.test(normalizedMessage));
 }
 
 /**
