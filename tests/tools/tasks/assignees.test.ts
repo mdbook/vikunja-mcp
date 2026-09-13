@@ -11,7 +11,7 @@ import {
 import { getClientFromContext } from '../../../src/client';
 import { MCPError, ErrorCode } from '../../../src/types';
 import { isAuthenticationError, isRetryableAuthError } from '../../../src/utils/auth-error-handler';
-import { withRetry } from '../../../src/utils/retry';
+import { withRetry, getHttpStatus } from '../../../src/utils/retry';
 import { parseMarkdown } from '../../utils/markdown';
 
 jest.mock('../../../src/client');
@@ -157,11 +157,16 @@ describe('Assignee operations', () => {
 
     it('should fail fast with an honest message for a non-retryable auth error (403 — permanent permission denial)', async () => {
       mockClient.tasks.getTask.mockResolvedValue({ id: 123, title: 'T', assignees: [] });
-      const forbidden = new Error('Forbidden') as Error & { status: number };
-      forbidden.status = 403;
+      // .statusCode is the shape real node-vikunja errors actually carry the status on
+      // (not bare .status) — see auth-error-handler.ts's isRetryableAuthError doc.
+      const forbidden = new Error('Forbidden') as Error & { statusCode: number };
+      forbidden.statusCode = 403;
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
       (isRetryableAuthError as jest.Mock).mockReturnValue(false);
       (withRetry as jest.Mock).mockRejectedValue(forbidden);
+      // getHttpStatus (from retry.ts, auto-mocked in this file) backs the honest
+      // "HTTP <status>" message; wire it to reflect the injected error's real status.
+      (getHttpStatus as jest.Mock).mockReturnValue(403);
 
       await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.toThrow(
         /Assignee operations may have authentication issues.*Forbidden.*HTTP 403/s
@@ -264,11 +269,12 @@ describe('Assignee operations', () => {
     });
 
     it('should fail fast with an honest message during removal for a non-retryable auth error (403)', async () => {
-      const forbidden = new Error('Forbidden') as Error & { status: number };
-      forbidden.status = 403;
+      const forbidden = new Error('Forbidden') as Error & { statusCode: number };
+      forbidden.statusCode = 403;
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
       (isRetryableAuthError as jest.Mock).mockReturnValue(false);
       (withRetry as jest.Mock).mockRejectedValue(forbidden);
+      (getHttpStatus as jest.Mock).mockReturnValue(403);
 
       await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.toThrow(
         /Assignee removal operations may have authentication issues.*Forbidden.*HTTP 403/s

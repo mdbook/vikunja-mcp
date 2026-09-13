@@ -144,36 +144,71 @@ describe('Auth Error Handler', () => {
   });
 
   describe('isRetryableAuthError', () => {
-    it('should return true for a 401 (structured status)', () => {
+    it('should return true for a 401 (statusCode — the shape real node-vikunja errors use)', () => {
+      const error401 = new Error('Unauthorized') as Error & { statusCode: number };
+      error401.statusCode = 401;
+      expect(isRetryableAuthError(error401)).toBe(true);
+    });
+
+    it('should return true for a real node-vikunja-shaped 401 with a wrapped, digit-free message', () => {
+      // Mirrors node-vikunja's VikunjaAuthenticationError: .statusCode is the real status,
+      // .response is the JSON body (no .status), and the message never says "401".
+      const vikunjaShaped = new Error(
+        'Authentication failed. Original error: Please renew your token',
+      ) as Error & { statusCode: number; response: { message: string; code: string } };
+      vikunjaShaped.statusCode = 401;
+      vikunjaShaped.response = { message: 'Please renew your token', code: 'kg.auth.token.invalid' };
+      expect(isRetryableAuthError(vikunjaShaped)).toBe(true);
+    });
+
+    it('should return true for a 401 (fallback: bare .status)', () => {
       const error401 = new Error('Unauthorized') as Error & { status: number };
       error401.status = 401;
       expect(isRetryableAuthError(error401)).toBe(true);
     });
 
-    it('should return true for a 401 (axios-style response.status)', () => {
+    it('should return true for a 401 (fallback: axios-style response.status)', () => {
       const axiosError = new Error('Request failed') as Error & { response: { status: number } };
       axiosError.response = { status: 401 };
       expect(isRetryableAuthError(axiosError)).toBe(true);
     });
 
-    it('should return true for a 401 at the start of the message', () => {
+    it('should return true for a 401 at the start of the message (fallback pattern, no structured status)', () => {
       expect(isRetryableAuthError(new Error('401 Unauthorized'))).toBe(true);
       expect(isRetryableAuthError(new Error('Error: 401 details'))).toBe(true);
     });
 
-    it('should return FALSE for a 403 (structured status) — a 403 is a permanent permission denial, not retryable', () => {
+    it('should return FALSE for a 403 (statusCode) — a 403 is a permanent permission denial, not retryable', () => {
+      const error403 = new Error('Forbidden') as Error & { statusCode: number };
+      error403.statusCode = 403;
+      expect(isRetryableAuthError(error403)).toBe(false);
+    });
+
+    it('should return FALSE for a real node-vikunja-shaped 403 whose message does NOT say "forbidden" or "403"', () => {
+      // The exact LabelAuthenticationError shape: statusCode 403, message wraps the body,
+      // and the body may not contain "forbidden" at all (e.g. a permission-phrased message).
+      const labelAuthError = new Error(
+        'Label operation failed due to authentication issue. Original error: You do not have the right to see this',
+      ) as Error & { statusCode: number; response: { message: string } };
+      labelAuthError.name = 'LabelAuthenticationError';
+      labelAuthError.statusCode = 403;
+      labelAuthError.response = { message: 'You do not have the right to see this' };
+      expect(isRetryableAuthError(labelAuthError)).toBe(false);
+    });
+
+    it('should return FALSE for a 403 (fallback: bare .status)', () => {
       const error403 = new Error('Forbidden') as Error & { status: number };
       error403.status = 403;
       expect(isRetryableAuthError(error403)).toBe(false);
     });
 
-    it('should return FALSE for a 403 (axios-style response.status)', () => {
+    it('should return FALSE for a 403 (fallback: axios-style response.status)', () => {
       const axiosForbidden = new Error('Access denied') as Error & { response: { status: number } };
       axiosForbidden.response = { status: 403 };
       expect(isRetryableAuthError(axiosForbidden)).toBe(false);
     });
 
-    it('should return FALSE for a 403 message pattern', () => {
+    it('should return FALSE for a 403 message pattern (fallback, no structured status)', () => {
       expect(isRetryableAuthError(new Error('403 Forbidden'))).toBe(false);
       expect(isRetryableAuthError(new Error('Error: 403 forbidden'))).toBe(false);
     });

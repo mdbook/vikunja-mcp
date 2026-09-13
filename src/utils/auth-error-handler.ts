@@ -5,6 +5,7 @@
 
 import { MCPError, ErrorCode } from '../types';
 import { logger } from './logger';
+import { getHttpStatus } from './retry';
 
 /**
  * Check if an error is authentication-related using structured error classification
@@ -74,19 +75,19 @@ export function isAuthenticationError(error: unknown): boolean {
  * refreshing (worth a retry), while a 403 is a permanent permission denial (the token is
  * valid but not allowed to do this) — retrying it just hammers the breaker for nothing.
  * Use this (not `isAuthenticationError`) to gate `shouldRetry` on auth-flavored operations.
+ *
+ * Status detection is via `getHttpStatus` (checks `.statusCode` first, then `.status`,
+ * then `.response.status`) — real node-vikunja errors (e.g. `LabelAuthenticationError`)
+ * carry the HTTP status on `.statusCode`; their `.response` is the JSON response BODY
+ * (`{message, code}`), not `{status}`. A message-pattern fallback is kept belt-and-suspenders
+ * for error shapes that don't carry a structured status at all.
  */
 export function isRetryableAuthError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
 
-  const errorWithStatus = error as Error & { status?: number; response?: { status?: number } };
-
-  if (errorWithStatus.status === 401) {
-    return true;
-  }
-
-  if (errorWithStatus.response?.status === 401) {
+  if (getHttpStatus(error) === 401) {
     return true;
   }
 

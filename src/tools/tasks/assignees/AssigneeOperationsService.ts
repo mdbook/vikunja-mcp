@@ -8,18 +8,18 @@ import { MCPError, ErrorCode } from '../../../types';
 import { getClientFromContext } from '../../../client';
 import type { VikunjaClient } from 'node-vikunja';
 import { isAuthenticationError, isRetryableAuthError } from '../../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../../utils/retry';
+import { withRetry, RETRY_CONFIG, getHttpStatus } from '../../../utils/retry';
 import { AUTH_ERROR_MESSAGES } from '../constants';
 
 /**
  * Build an honest error message for a non-retryable auth error (typically 403 — a
  * permanent permission denial, as opposed to a 401 that a retry might clear). Parallel
- * to the same helper in `../labels.ts`.
+ * to the same helper in `../labels.ts`. Status via `getHttpStatus` (`.statusCode` first —
+ * the property real node-vikunja errors carry it on, not `.status`/`.response.status`).
  */
 function nonRetryableAuthMessage(prefix: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const errorWithStatus = error as { status?: number; response?: { status?: number } };
-  const status = errorWithStatus?.status ?? errorWithStatus?.response?.status;
+  const status = getHttpStatus(error);
   const statusNote = status
     ? `HTTP ${status} — the Vikunja service token likely lacks permission for this operation`
     : 'the Vikunja service token likely lacks permission for this operation';

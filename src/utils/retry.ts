@@ -219,8 +219,14 @@ export function getHealthStats(breaker: CircuitBreaker): CircuitBreaker.Stats {
 
 /**
  * Best-effort HTTP status from Error-like objects (node-vikunja / fetch wrappers).
+ *
+ * Order matters: node-vikunja's `VikunjaError` family (incl. `LabelAuthenticationError`)
+ * exposes the real HTTP status on `.statusCode` — `.response` on those errors is the
+ * JSON response BODY (`{message, code}`), which has no `.status` property. `.status` /
+ * `.response.status` are kept as fallbacks for other error shapes (axios-style, fetch
+ * wrappers) that do use them.
  */
-function getHttpStatus(error: unknown): number | undefined {
+export function getHttpStatus(error: unknown): number | undefined {
   if (error === null || typeof error !== 'object') {
     return undefined;
   }

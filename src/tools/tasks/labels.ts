@@ -7,7 +7,7 @@ import { MCPError, ErrorCode } from '../../types';
 import { getClientFromContext } from '../../client';
 import type { VikunjaClient } from 'node-vikunja';
 import { isAuthenticationError, isRetryableAuthError } from '../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../utils/retry';
+import { withRetry, RETRY_CONFIG, getHttpStatus } from '../../utils/retry';
 import { validateId } from './validation';
 import { createSimpleResponse, formatAorpAsMarkdown } from '../../utils/response-factory';
 
@@ -19,8 +19,7 @@ import { createSimpleResponse, formatAorpAsMarkdown } from '../../utils/response
  */
 function nonRetryableAuthMessage(prefix: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const errorWithStatus = error as { status?: number; response?: { status?: number } };
-  const status = errorWithStatus?.status ?? errorWithStatus?.response?.status;
+  const status = getHttpStatus(error);
   const statusNote = status
     ? `HTTP ${status} — the Vikunja service token likely lacks permission for this operation`
     : 'the Vikunja service token likely lacks permission for this operation';
@@ -28,8 +27,15 @@ function nonRetryableAuthMessage(prefix: string, error: unknown): string {
 }
 
 /**
- * Detect a 403/Forbidden error robustly (numeric status, axios-style response.status,
- * or a "forbidden" message — case-insensitive).
+ * Detect a 403/Forbidden error robustly.
+ *
+ * Primary detection is `getHttpStatus` (checks `.statusCode` first — the property real
+ * node-vikunja errors like `LabelAuthenticationError` actually carry the HTTP status on;
+ * `.status`/`.response.status` are fallbacks for other error shapes). A case-insensitive
+ * "forbidden" message match is kept as a belt-and-suspenders fallback for error shapes
+ * with no structured status at all — NOT the primary signal, since node-vikunja wraps a
+ * 403 in a message like "Label operation failed due to authentication issue. Original
+ * error: <body>", which may not contain the word "forbidden" at all.
  *
  * Confirmed by controlled experiment (2x): `DELETE /tasks/{id}/labels/{labelId}` is
  * NOT idempotent on Vikunja's side — removing a label that IS currently on the task
@@ -42,8 +48,7 @@ function isForbiddenError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  const errorWithStatus = error as Error & { status?: number; response?: { status?: number } };
-  if (errorWithStatus.status === 403 || errorWithStatus.response?.status === 403) {
+  if (getHttpStatus(error) === 403) {
     return true;
   }
   return error.message.toLowerCase().includes('forbidden');
@@ -241,6 +246,22 @@ export async function removeLabels(args: {
         // Vikunja's DELETE is not idempotent: removing a label that is already absent
         // returns 403, not a 404/no-op. That is the desired end state already reached —
         // treat it as success, not an error, and move on to the next label.
+        //
+        // Caveats, read before touching this:
+        // (a) This also masks a GENUINE permission 403 (token actually lacking
+        //     labels-delete scope) — we cannot tell the two apart from the response
+        //     alone. Swallowing it here relies on the verified invariant that the
+        //     service token has full labels-delete scope; if that ever regresses,
+        //     remove-label will silently no-op instead of erroring loudly.
+        // (b) No opossum errorFilter is configured on the shared `vikunja-auth-connect`
+        //     breaker (deliberately — see the builder brief: don't redesign the
+        //     breaker), so a swallowed 403 still counts as ONE failure against it before
+        //     we catch and ignore it. A burst of 5+ already-absent-label removals in a
+        //     short window (opossum's default volumeThreshold) could still trip the
+        //     breaker open even though every one of them was a benign no-op. If that is
+        //     ever observed in practice, the fix is an errorFilter (or
+        //     enableCircuitBreaker: false) on this specific call — not a change to the
+        //     shared breaker's general behavior.
         if (isForbiddenError(removeError)) {
           alreadyAbsent.push(labelId);
           continue;
