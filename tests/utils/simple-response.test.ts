@@ -53,6 +53,35 @@ describe('simple-response - Task Formatting', () => {
       expect(result).toContain('Users cannot login');
     });
 
+    it('should render the TASK (not its labels) for a single labelled get-task (#360)', () => {
+      // get-task passes the bare task object as `data`; a labelled task carries a
+      // `.labels` array that used to be picked as the top-level collection, so the
+      // response rendered "Results: 1 item(s) / awaiting-mik" instead of the task.
+      const task: Task = {
+        id: 360,
+        project_id: 12,
+        title: 'iMessage bridge down',
+        description: 'BB listener stalled',
+        done: false,
+        labels: [{ id: 2, title: 'awaiting-mik' }],
+        repeat_after: 0
+      };
+
+      const result = formatSuccessMessage(
+        'get-task',
+        'Retrieved task "iMessage bridge down"',
+        task as unknown as Record<string, unknown>,
+        { taskId: 360 }
+      );
+
+      expect(result).toContain('iMessage bridge down');
+      expect(result).toContain('BB listener stalled');
+      expect(result).toContain('**id:** 360');
+      // Labels still show as a field on the task, but never AS the whole payload.
+      expect(result).not.toContain('**Results:**');
+      expect(result).toContain('awaiting-mik');
+    });
+
     it('should format task with minimal fields', () => {
       const task: Task = {
         id: 2,

@@ -120,8 +120,15 @@ export function formatSuccessMessage(
   }
 
   if (data) {
-    // Check for known collection types first
-    const collection = data.tasks || data.projects || data.labels || data.users || data.items;
+    // A single entity (a task/project object) carries its OWN `.labels`/`.users`
+    // arrays, so treating those as the top-level collection rendered a labelled
+    // task's labels INSTEAD of the task on get-task (#360). A collection payload is a
+    // wrapper ({tasks:[…]}/{labels:[…]}) with no top-level `id`; a single entity has one.
+    const isSingleEntity =
+      typeof data === 'object' && !Array.isArray(data) && 'id' in data;
+    const collection = isSingleEntity
+      ? undefined
+      : (data.tasks || data.projects || data.labels || data.users || data.items);
 
     if (collection && Array.isArray(collection)) {
       content += `**Results:** ${collection.length} item(s)\n\n`;
