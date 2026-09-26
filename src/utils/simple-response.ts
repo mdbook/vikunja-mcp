@@ -128,7 +128,7 @@ export function formatSuccessMessage(
       typeof data === 'object' && !Array.isArray(data) && 'id' in data;
     const collection = isSingleEntity
       ? undefined
-      : (data.tasks || data.projects || data.labels || data.users || data.items);
+      : (data.tasks || data.projects || data.labels || data.users || data.items || data.comments);
 
     if (collection && Array.isArray(collection)) {
       content += `**Results:** ${collection.length} item(s)\n\n`;
@@ -263,6 +263,15 @@ function formatDataItems(items: DataItem[]): string {
         return formatTaskItem(task, index);
       }
 
+      // A TaskComment has no title/name, so the generic fallback below used to
+      // JSON.stringify() the whole item as the "title" — which re-escapes any
+      // quote/newline already inside the comment's HTML (e.g. a <pre><code>
+      // block) into literal `\"` / `\n` text in the rendered response (#454).
+      // Render its own text field directly instead.
+      if (isTaskCommentLike(item)) {
+        return formatCommentItem(item as unknown as TaskCommentLike, index);
+      }
+
       // Fallback to simple formatting for other object types
       const id = item.id || index + 1;
       const title = item.title || item.name || JSON.stringify(item);
@@ -270,6 +279,37 @@ function formatDataItems(items: DataItem[]): string {
     }
     return `${index + 1}. ${JSON.stringify(item)}`;
   }).join('\n') + '\n\n';
+}
+
+/**
+ * Minimal shape of a TaskComment for display purposes
+ */
+interface TaskCommentLike {
+  id?: number | string;
+  comment: string;
+  [key: string]: unknown;
+}
+
+/**
+ * A TaskComment is identified by its own `.comment` string field and the
+ * absence of a `.title`/`.name` (which would route it through formatTaskItem
+ * or the generic name/title fallback instead).
+ */
+function isTaskCommentLike(item: DataItem): boolean {
+  return typeof item.comment === 'string' && !item.title && !item.name;
+}
+
+/**
+ * Format a single TaskComment with its text rendered verbatim (no
+ * JSON.stringify — see #454).
+ */
+function formatCommentItem(comment: TaskCommentLike, index: number): string {
+  const parts: string[] = [`### ${index + 1}. Comment (ID: ${comment.id ?? index + 1})`];
+  if (comment.created) {
+    parts.push(`- **Created:** ${String(comment.created)}`);
+  }
+  parts.push(`- **Text:**\n${comment.comment}`);
+  return parts.join('\n') + '\n';
 }
 
 /**
@@ -282,9 +322,18 @@ function formatObjectData(data: Record<string, unknown>): string {
   return entries
     .filter(([_, value]) => value !== undefined && value !== null)
     .map(([key, value]) => {
-      const formattedValue = typeof value === 'object' && value !== null
-        ? JSON.stringify(value, null, 2)
-        : String(value);
+      let formattedValue: string;
+      if (typeof value === 'object' && value !== null && !Array.isArray(value) && isTaskCommentLike(value as DataItem)) {
+        // A create/update-comment response nests the TaskComment under this
+        // key. JSON.stringify()-ing it re-escapes its own `.comment` text
+        // (quotes/newlines inside e.g. a <pre><code> block) into literal
+        // `\"` / `\n` in the rendered response (#454) — render it plainly.
+        formattedValue = `\n${(value as TaskCommentLike).comment}`;
+      } else if (typeof value === 'object' && value !== null) {
+        formattedValue = JSON.stringify(value, null, 2);
+      } else {
+        formattedValue = String(value);
+      }
       return `**${key}:** ${formattedValue}`;
     })
     .join('\n') + '\n\n';

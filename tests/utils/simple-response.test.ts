@@ -344,6 +344,39 @@ describe('simple-response - Task Formatting', () => {
     });
   });
 
+  describe('comment responses do not double-escape <pre><code> text (#454)', () => {
+    // Symptom: a comment (or comment-list) response containing a <pre><code>
+    // block with internal quotes/newlines rendered them as literal `\"` / `\n`
+    // text instead of the real characters, because the TaskComment object was
+    // blindly JSON.stringify()'d as part of the generic response formatter.
+    const codeBlock = '<pre><code>echo "hi"\nls</code></pre>';
+
+    it('renders a single created comment\'s text verbatim, not JSON.stringify\'d', () => {
+      const result = formatSuccessMessage(
+        'comment',
+        'Comment added successfully',
+        { comment: { id: 1, task_id: 454, comment: codeBlock } }
+      );
+
+      expect(result).toContain(codeBlock);
+      expect(result).not.toContain('\\"');
+      expect(result).not.toContain('\\n');
+    });
+
+    it('renders a listed comment\'s text verbatim, not JSON.stringify\'d', () => {
+      const result = formatSuccessMessage(
+        'list',
+        'Found 1 comments',
+        { comments: [{ id: 1, task_id: 454, comment: codeBlock }] },
+        { count: 1 }
+      );
+
+      expect(result).toContain(codeBlock);
+      expect(result).not.toContain('\\"');
+      expect(result).not.toContain('\\n');
+    });
+  });
+
   describe('createErrorResponse', () => {
     it('should create error response', () => {
       const response = createErrorResponse(
