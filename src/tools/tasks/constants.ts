@@ -11,11 +11,11 @@ export const AUTH_ERROR_MESSAGES = {
     'Assignee operations may have authentication issues with certain Vikunja API versions. ' +
     'This is a known limitation. Other task fields were updated but assignees could not be changed.',
   ASSIGNEE_ASSIGN:
-    'Assignee operations may have authentication issues with certain Vikunja API versions. ' +
-    'This is a known limitation that prevents assigning users to tasks.',
+    'Vikunja refused to assign the user(s) to the task. The service token may lack permission ' +
+    "for this task, or the user may not have access to the task's project.",
   ASSIGNEE_REMOVE:
-    'Assignee removal operations may have authentication issues with certain Vikunja API versions. ' +
-    'This is a known limitation that prevents removing users from tasks.',
+    'Vikunja refused to remove the user(s) from the task. The service token may lack permission ' +
+    'for this task.',
   ASSIGNEE_REMOVE_PARTIAL:
     'Assignee removal operations may have authentication issues with certain Vikunja API versions. ' +
     'This is a known limitation. New assignees were added but old assignees could not be removed.',

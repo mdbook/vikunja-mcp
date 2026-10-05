@@ -12,18 +12,31 @@ import { withRetry, RETRY_CONFIG, getHttpStatus } from '../../../utils/retry';
 import { AUTH_ERROR_MESSAGES } from '../constants';
 
 /**
- * Build an honest error message for a non-retryable auth error (typically 403 — a
- * permanent permission denial, as opposed to a 401 that a retry might clear). Parallel
- * to the same helper in `../labels.ts`. Status via `getHttpStatus` (`.statusCode` first —
- * the property real node-vikunja errors carry it on, not `.status`/`.response.status`).
+ * Describe what Vikunja actually returned: `HTTP <status>: <message>`, plus the server's
+ * body message when it differs from the error message. Status via `getHttpStatus`
+ * (`.statusCode` first — the property real node-vikunja errors carry it on). On
+ * node-vikunja errors `.response` is the JSON body (`{message, code}`), not an HTTP response.
  */
-function nonRetryableAuthMessage(prefix: string, error: unknown): string {
+export function describeVikunjaError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const status = getHttpStatus(error);
-  const statusNote = status
-    ? `HTTP ${status} — the Vikunja service token likely lacks permission for this operation`
-    : 'the Vikunja service token likely lacks permission for this operation';
-  return `${prefix}: ${message} (${statusNote})`;
+  const body =
+    error !== null && typeof error === 'object'
+      ? (error as { response?: { message?: unknown } }).response?.message
+      : undefined;
+  const serverNote =
+    typeof body === 'string' && body !== '' && body !== message ? ` (server: ${body})` : '';
+  return status ? `HTTP ${status}: ${message}${serverNote}` : `${message}${serverNote}`;
+}
+
+/**
+ * Build the error message for an auth failure on an assignee write, carrying the real
+ * Vikunja status/message. `retried` is true only for a retryable (401) error whose
+ * retries were exhausted — a 403 fails fast and must not claim a retry.
+ */
+function assigneeAuthMessage(prefix: string, error: unknown, retried: boolean): string {
+  const retryNote = retried ? ` (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)` : '';
+  return `${prefix} Vikunja returned ${describeVikunjaError(error)}${retryNote}`;
 }
 
 /**
@@ -103,13 +116,13 @@ export const AssigneeOperationsService = {
       if (isRetryableAuthError(assigneeError)) {
         throw new MCPError(
           ErrorCode.API_ERROR,
-          `${AUTH_ERROR_MESSAGES.ASSIGNEE_ASSIGN} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+          assigneeAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_ASSIGN, assigneeError, true),
         );
       }
       if (isAuthenticationError(assigneeError)) {
         throw new MCPError(
           ErrorCode.API_ERROR,
-          nonRetryableAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_ASSIGN, assigneeError),
+          assigneeAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_ASSIGN, assigneeError, false),
         );
       }
       throw assigneeError;
@@ -137,14 +150,14 @@ export const AssigneeOperationsService = {
         if (isRetryableAuthError(removeError)) {
           throw new MCPError(
             ErrorCode.API_ERROR,
-            `${AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
+            assigneeAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE, removeError, true),
           );
         }
         // A 403 (or any other non-retryable auth error) fails fast — say so honestly.
         if (isAuthenticationError(removeError)) {
           throw new MCPError(
             ErrorCode.API_ERROR,
-            nonRetryableAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE, removeError),
+            assigneeAuthMessage(AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE, removeError, false),
           );
         }
         throw removeError;
