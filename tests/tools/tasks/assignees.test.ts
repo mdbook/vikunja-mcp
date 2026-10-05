@@ -149,9 +149,30 @@ describe('Assignee operations', () => {
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
       (isRetryableAuthError as jest.Mock).mockReturnValue(true);
       (withRetry as jest.Mock).mockRejectedValue(authError);
+      (getHttpStatus as jest.Mock).mockReturnValue(401);
 
       await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.toThrow(
-        'Failed to assign users to task: Assignee operations may have authentication issues with certain Vikunja API versions. This is a known limitation that prevents assigning users to tasks. (Retried 3 times)'
+        "Failed to assign users to task: Vikunja refused to assign the user(s) to the task. The service token may lack permission for this task, or the user may not have access to the task's project. Vikunja returned HTTP 401: Authentication failed (Retried 3 times)"
+      );
+      // The old misleading "known limitation" text must be gone.
+      await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.not.toThrow(/known limitation/);
+    });
+
+    it('surfaces the Vikunja server body message when it differs from the error message', async () => {
+      mockClient.tasks.getTask.mockResolvedValue({ id: 123, title: 'T', assignees: [] });
+      const forbidden = new Error('Request failed') as Error & {
+        statusCode: number;
+        response: { message: string; code: number };
+      };
+      forbidden.statusCode = 403;
+      forbidden.response = { message: 'Forbidden', code: 403 };
+      (isAuthenticationError as jest.Mock).mockReturnValue(true);
+      (isRetryableAuthError as jest.Mock).mockReturnValue(false);
+      (withRetry as jest.Mock).mockRejectedValue(forbidden);
+      (getHttpStatus as jest.Mock).mockReturnValue(403);
+
+      await expect(assignUsers({ id: 123, assignees: [1] })).rejects.toThrow(
+        'Vikunja returned HTTP 403: Request failed (server: Forbidden)'
       );
     });
 
@@ -169,7 +190,7 @@ describe('Assignee operations', () => {
       (getHttpStatus as jest.Mock).mockReturnValue(403);
 
       await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.toThrow(
-        /Assignee operations may have authentication issues.*Forbidden.*HTTP 403/s
+        'Failed to assign users to task: Vikunja refused to assign the user(s) to the task. The service token may lack permission for this task, or the user may not have access to the task\'s project. Vikunja returned HTTP 403: Forbidden'
       );
       // Must NOT claim a retry that never happened.
       await expect(assignUsers({ id: 123, assignees: [1, 2] })).rejects.not.toThrow(/Retried/);
@@ -262,10 +283,12 @@ describe('Assignee operations', () => {
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
       (isRetryableAuthError as jest.Mock).mockReturnValue(true);
       (withRetry as jest.Mock).mockRejectedValue(authError);
+      (getHttpStatus as jest.Mock).mockReturnValue(401);
 
       await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.toThrow(
-        'Failed to remove users from task: Assignee removal operations may have authentication issues with certain Vikunja API versions. This is a known limitation that prevents removing users from tasks. (Retried 3 times)'
+        'Failed to remove users from task: Vikunja refused to remove the user(s) from the task. The service token may lack permission for this task. Vikunja returned HTTP 401: Authentication failed (Retried 3 times)'
       );
+      await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.not.toThrow(/known limitation/);
     });
 
     it('should fail fast with an honest message during removal for a non-retryable auth error (403)', async () => {
@@ -277,7 +300,7 @@ describe('Assignee operations', () => {
       (getHttpStatus as jest.Mock).mockReturnValue(403);
 
       await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.toThrow(
-        /Assignee removal operations may have authentication issues.*Forbidden.*HTTP 403/s
+        'Failed to remove users from task: Vikunja refused to remove the user(s) from the task. The service token may lack permission for this task. Vikunja returned HTTP 403: Forbidden'
       );
       await expect(unassignUsers({ id: 123, assignees: [1] })).rejects.not.toThrow(/Retried/);
     });
