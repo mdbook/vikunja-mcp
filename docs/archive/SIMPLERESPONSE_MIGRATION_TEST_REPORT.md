@@ -1,5 +1,8 @@
 # SimpleResponse Migration Test Report
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 **Date:** 2025-12-15
 **Migration:** AORP to SimpleResponse (2,925+ lines eliminated)
 **Status:** ✅ **CORE FUNCTIONALITY WORKING**

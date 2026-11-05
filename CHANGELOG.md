@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Put install, client configuration and a first task check at the top of the README.
+- Move tool examples to `docs/tools.md` and historical reports to `docs/archive/`.
+- Document the stdio-only Docker route without assuming public image availability.
+
 ## 0.3.2 — 2026-08-11
 
 ### Fixes
@@ -77,3 +83,48 @@ First release of the **`@joyjit/vikunja-mcp`** soft fork (based on democratize-t
 
 - Package renamed from `@democratize-technology/vikunja-mcp` → `@joyjit/vikunja-mcp`
 - Upstream PRs remain open where applicable; prefer upstream once equivalent fixes ship there
+
+## Historical README notes
+
+Archived fork highlights and architecture notes from the former README. These
+are release history, not current setup requirements or new verification claims.
+
+### Fork highlights (vs upstream npm `0.2.0`)
+
+- **Thin wrapper**: task titles/descriptions are passed through to Vikunja unchanged; no local content blocklist (words like “format” or HTML are not rejected here)
+- **No HTML-encoding** of titles/descriptions before API calls (real HTML task bodies work)
+- **bulk-update** preserves fields it was not asked to change
+- **Task `projectId` update** actually moves the task; labels apply on create
+- **Project partial update** keeps title / parent instead of wiping them
+- **Assignees stick**: create/assign use per-user APIs and verify persistence (Vikunja’s bulk assign body is ignored)
+- **Labels stick**: set labels via additive `PUT` (Vikunja’s bulk labels route clears labels when given the wrong body shape)
+- **`percentDone`**: create / update / bulk can set completion percentage (0–100)
+- **Filtered lists paginate correctly**: `done` / `filter` go to the server before paging (with client-side fallback)
+- **Bulk writes vs SQLite**: default one write at a time, retry lock/5xx; raise with `VIKUNJA_BULK_WRITE_CONCURRENCY` on Postgres
+- **Vikunja 2.x**: `getAllTasks` uses `GET /tasks`; list responses include all items (no silent drop after 10)
+- **Node.js 24** + Dockerized MCP integration CI against Vikunja 2.3
+
+### Architecture notes (v0.2.0)
+
+This release represents a **massive architectural simplification** that eliminates technical debt while enhancing security and reliability:
+
+#### Storage Architecture Refactoring (90% Code Reduction)
+- **Before**: 33 files, 9,803 lines of over-engineered storage system
+- **After**: 4 files, essential functionality only
+- **Eliminated**: Complex orchestrators, health monitors, statistics tracking, migration systems
+- **Result**: Same external API with dramatically improved maintainability
+
+#### Zod-Based Filter System (850+ Lines Removed)
+- **Before**: Custom tokenizer, parser, and validator with security vulnerabilities
+- **After**: Secure Zod schema validation with production-ready parsing
+- **Enhanced**: DoS protection and comprehensive error handling
+- **Result**: Faster parsing, better security, and enterprise-grade reliability
+
+#### Production-Ready Retry System (580+ Lines Replaced)
+- **Before**: Custom retry logic with maintenance overhead
+- **After**: Battle-tested opossum circuit breaker library
+- **Features**: Circuit breaker state sharing, automatic recovery, comprehensive monitoring
+- **Result**: Production resilience with battle-tested patterns
+
+#### Zero Breaking Changes
+All improvements maintain **100% backward compatibility** with existing implementations while providing enhanced reliability and security.

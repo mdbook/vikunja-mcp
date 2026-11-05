@@ -1,5 +1,8 @@
 # Filter Parser/Tokenizer Refactoring Summary
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 ## Overview
 Successfully completed the critical refactoring task to eliminate custom Filter Parser/Tokenizer wheel reinvention by replacing it with Zod validation, achieving **90%+ code reduction** and improved security.
 

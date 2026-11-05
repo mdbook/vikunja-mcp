@@ -1,5 +1,8 @@
 # Architecture Simplification: v0.2.0 Refactoring
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 This document describes the massive architectural simplification achieved in v0.2.0, representing a **90% code reduction** while enhancing security, reliability, and maintainability.
 
 ## Executive Summary

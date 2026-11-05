@@ -1,5 +1,8 @@
 # 🚨 MCP VALIDATION EXECUTIVE SUMMARY
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 **Validation Status**: ✅ CONDITIONAL APPROVAL
 **Overall Validation Score**: 9.0/10.0
 **Risk Level**: LOW-MEDIUM
