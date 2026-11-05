@@ -1,9 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, matchesGlob, relative, resolve } from 'node:path';
 
 const root = resolve(__dirname, '..');
 const read = (file: string): string => readFileSync(resolve(root, file), 'utf8');
+const packageFiles = (JSON.parse(read('package.json')) as { files: string[] }).files;
 
 type ClientConfig = {
   mcpServers: {
@@ -72,6 +73,21 @@ describe('README setup documentation', () => {
       if (/^(?:[a-z]+:|#)/i.test(href)) continue;
       const target = href.split('#')[0];
       expect(existsSync(resolve(root, dirname(file), target))).toBe(true);
+      if (file === 'README.md') {
+        const packagePath = relative(root, resolve(root, target));
+        expect({
+          target,
+          shipped: packageFiles.some((pattern) => matchesGlob(packagePath, pattern)),
+        }).toEqual({ target, shipped: true });
+      }
+    }
+  });
+
+  it('keeps historical reports out of the npm package', () => {
+    for (const file of readdirSync(resolve(root, 'docs/archive'))) {
+      expect(packageFiles.some((pattern) => matchesGlob(`docs/archive/${file}`, pattern))).toBe(
+        false,
+      );
     }
   });
 });
