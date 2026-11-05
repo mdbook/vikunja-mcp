@@ -36,6 +36,8 @@ yarn-error.log*
 # Test coverage
 coverage/
 .nyc_output/
+coverage_output.txt
+.inspector-pid
 
 # Temporary files
 tmp/

@@ -1,4 +1,7 @@
 # Vikunja MCP Test Suite Baseline Analysis
+
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
 ## Pre-Refactoring Functionality Assessment
 
 **Analysis Date:** 2025-12-12

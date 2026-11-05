@@ -1,5 +1,8 @@
 # Migration Guide: v0.2.0 Architecture Simplification
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 This guide helps users and developers migrate to v0.2.0, which features major architectural improvements while maintaining **100% backward compatibility**.
 
 ## Quick Summary

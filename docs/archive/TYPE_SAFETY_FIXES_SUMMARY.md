@@ -1,5 +1,8 @@
 # Type Safety Fixes Summary
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 ## Overview
 Fixed critical unsafe type assignments in `src/utils/validation.ts` that could lead to runtime type confusion attacks.
 

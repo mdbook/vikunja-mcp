@@ -1,5 +1,8 @@
 # Comprehensive Input Sanitization Implementation
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 ## Overview
 
 This implementation adds enterprise-grade input sanitization to protect against injection attacks, XSS, and other security vulnerabilities. The comprehensive security layer works seamlessly with the existing credential masking system in `security.ts`.

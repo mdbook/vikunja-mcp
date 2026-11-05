@@ -1,5 +1,8 @@
 # Technical Debt & Improvement Opportunities
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 ## ARCH-003 AORP Helper Implementation - Marked.js Migration Opportunity
 
 ### 📊 Current State (Commit: b401fbe)

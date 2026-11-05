@@ -1,5 +1,8 @@
 # Test Fixes Documentation - December 19, 2024
 
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
+
 ## Summary
 
 This document outlines the critical bug fixes implemented to address 33 blocking test failures that were preventing production deployment. While many issues were resolved, significant work remains to meet the architect's requirements for test coverage and passing status.

@@ -1,4 +1,7 @@
 # Test File Mapping Documentation
+
+> Historical report. Not current setup instructions or test results.
+> See the [README](../../README.md) for supported setup.
 ## Detailed Analysis of Test Coverage by System Component
 
 **Document Purpose:** Map each test file to the specific system components it validates to ensure no functionality is lost during refactoring.

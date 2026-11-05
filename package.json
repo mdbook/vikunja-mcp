@@ -9,6 +9,10 @@
   },
   "files": [
     "dist/**/*",
+    "docs/development.md",
+    "docs/docker.md",
+    "docs/MCP-INTEGRATION-CI.md",
+    "docs/tools.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
