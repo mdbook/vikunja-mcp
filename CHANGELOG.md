@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Include the README's linked setup and tool docs in the npm package, without historical reports.
 - Put install, client configuration and a first task check at the top of the README.
 - Move tool examples to `docs/tools.md` and historical reports to `docs/archive/`.
 - Document the stdio-only Docker route without assuming public image availability.

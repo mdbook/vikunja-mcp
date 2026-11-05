@@ -99,7 +99,7 @@ not implemented. See the [tool reference](docs/tools.md) for details.
 - [Docker setup](docs/docker.md)
 - [Build from source and tests](docs/development.md)
 - [Changelog and fork history](CHANGELOG.md)
-- [Historical reports](docs/archive/README.md)
+- [Historical reports](https://github.com/mdbook/vikunja-mcp/blob/fleet-deploy/docs/archive/README.md)
 
 Maintained fork of [democratize-technology/vikunja-mcp](https://github.com/democratize-technology/vikunja-mcp).
 Source: [mdbook/vikunja-mcp](https://github.com/mdbook/vikunja-mcp).
