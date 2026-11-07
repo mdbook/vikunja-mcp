@@ -154,7 +154,16 @@ vikunja_tasks.comment({
 })
 
 // List all comments on a task
-vikunja_tasks.comment({ id: 123 })
+vikunja_task_comments({ operation: "list", id: 123 })
+
+// Read the latest comments first, with an explicit page
+vikunja_task_comments({ operation: "list", id: 123, page: 1, perPage: 20, newestFirst: true })
+
+// Comment listing returns all comments by default (oldest first). page is 1-based;
+// perPage defaults to 50 and only limits results when page is supplied.
+// newestFirst reverses the global order before paging. Responses include the
+// returned count and the total across all pages, even for an empty page.
+// All API pages are read to compute an exact total and global newest-first order.
 
 // Create a task relation (e.g., subtask, blocking, related)
 vikunja_tasks.relate({

@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AuthManager } from '../../src/auth/AuthManager';
 import type { VikunjaClientFactory } from '../../src/client/VikunjaClientFactory';
+import { z } from 'zod';
 import { MCPError, ErrorCode } from '../../src/types';
 
 jest.mock('../../src/client', () => ({
@@ -39,6 +40,7 @@ jest.mock('../../src/tools/tasks/reminders', () => ({
 
 jest.mock('../../src/tools/tasks/comments/index', () => ({
   handleComment: jest.fn(async () => ({ content: [{ type: 'text', text: 'commented' }] })),
+  listComments: jest.fn(async () => ({ content: [{ type: 'text', text: 'comments' }] })),
 }));
 
 jest.mock('../../src/tools/tasks-relations', () => ({
@@ -84,7 +86,7 @@ import { registerTaskCrudTool } from '../../src/tools/task-crud';
 import { assignUsers, unassignUsers, listAssignees } from '../../src/tools/tasks/assignees/index';
 import { applyLabels, removeLabels, listTaskLabels } from '../../src/tools/tasks/labels';
 import { addReminder, removeReminder, listReminders } from '../../src/tools/tasks/reminders';
-import { handleComment } from '../../src/tools/tasks/comments/index';
+import { handleComment, listComments } from '../../src/tools/tasks/comments/index';
 import { handleRelationSubcommands } from '../../src/tools/tasks-relations';
 import {
   bulkCreateTasks,
@@ -99,6 +101,7 @@ function captureHandler(register: (server: McpServer, auth: AuthManager, factory
   handler: Handler;
   auth: { isAuthenticated: jest.Mock; getSession: jest.Mock };
   factory: VikunjaClientFactory;
+  schema: z.ZodRawShape;
 } {
   const tool = jest.fn();
   const server = { tool } as unknown as McpServer;
@@ -113,7 +116,7 @@ function captureHandler(register: (server: McpServer, auth: AuthManager, factory
   const factory = {} as VikunjaClientFactory;
   register(server, auth as unknown as AuthManager, factory);
   const handler = tool.mock.calls[0][3] as Handler;
-  return { handler, auth, factory };
+  return { handler, auth, factory, schema: tool.mock.calls[0][2] as z.ZodRawShape };
 }
 
 describe('Focused task tool registration', () => {
@@ -196,6 +199,22 @@ describe('Focused task tool registration', () => {
   });
 
   describe('vikunja_task_comments', () => {
+    it('exposes validated pagination fields and forwards them to listComments', async () => {
+      const { handler, schema } = captureHandler(registerTaskCommentsTool);
+      const args = { operation: 'list', id: 123, page: 2, perPage: 20, newestFirst: true };
+      expect(z.object(schema).strict().parse(args)).toEqual(args);
+      await handler(args);
+      expect(listComments).toHaveBeenCalledWith({ id: 123, page: 2, perPage: 20, newestFirst: true });
+      await handler({ operation: 'list', id: 123 });
+      expect(listComments).toHaveBeenLastCalledWith({ id: 123 });
+      for (const field of ['page', 'perPage']) {
+        for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+          expect(z.object(schema).safeParse({ ...args, [field]: value }).success).toBe(false);
+        }
+      }
+      expect(z.object(schema).safeParse({ ...args, newestFirst: 'true' }).success).toBe(false);
+    });
+
     it('routes comment operation and wraps errors', async () => {
       const { handler } = captureHandler(registerTaskCommentsTool);
       await handler({ operation: 'comment', id: 1, comment: 'hi' });
