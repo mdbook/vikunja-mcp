@@ -59,15 +59,19 @@ export const commentResponseFormatter = {
   /**
    * Format successful comment list response
    */
-  formatListCommentsResponse(comments: TaskComment[]): StandardTaskResponse {
+  formatListCommentsResponse(
+    comments: TaskComment[],
+    total: number = comments.length,
+  ): StandardTaskResponse {
     return {
       success: true,
       operation: 'list',
-      message: `Found ${comments.length} comments`,
+      message: `Found ${comments.length} comments (${total} total)`,
       comments: comments,
       metadata: {
         timestamp: new Date().toISOString(),
         count: comments.length,
+        total,
       },
     };
   },
@@ -80,6 +84,7 @@ export const commentResponseFormatter = {
     const safeMetadata: ResponseMetadata = {
       timestamp: response.metadata?.timestamp || new Date().toISOString(),
       ...(response.metadata?.count !== undefined ? { count: response.metadata.count } : {}),
+      ...(response.metadata?.total !== undefined ? { total: response.metadata.total } : {}),
       ...(response.metadata?.affectedFields ? { affectedFields: response.metadata.affectedFields } : {}),
       // Convert previousState to proper Record<string, unknown> if it exists
       ...(response.metadata?.previousState && typeof response.metadata.previousState === 'object' && response.metadata.previousState !== null
