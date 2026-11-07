@@ -129,6 +129,9 @@ vikunja_tasks.update({
   assignees: [1, 2, 4]  // Only adds/removes differences
 })
 
+// Replace the complete label set (omit labels to preserve; [] clears)
+vikunja_tasks.update({ id: 123, labels: [2] })
+
 // Delete a task
 vikunja_tasks.delete({ id: 123 })
 
@@ -248,7 +251,7 @@ vikunja_tasks.bulk-update({
 vikunja_tasks.bulk-update({
   taskIds: [123, 124, 125],
   field: "labels",
-  value: [1, 3, 5]       // Adds these labels (does not clear others)
+  value: [1, 3, 5]       // Complete desired set; [] clears labels
 })
 
 vikunja_tasks.bulk-update({
@@ -529,8 +532,11 @@ vikunja_labels.update({
 vikunja_labels.delete({ id: 1 })
 
 // --- Label Assignment to Tasks ---
-// Labels are ADDED (missing only). Already-present labels are a no-op.
-// Passing an empty list does not clear labels.
+// apply-label ADDS missing labels. Already-present labels are a no-op.
+// update/bulk-update REPLACE the complete set; [] clears, omission preserves.
+// Replacement/removal verify persisted labels after POST /tasks/{id}/labels/bulk.
+// The token must permit that route, independently of apply-label's PUT route.
+// Removal reads then writes the remaining set (not atomic against concurrent edits).
 
 // Apply multiple labels to a task
 vikunja_tasks.apply-label({

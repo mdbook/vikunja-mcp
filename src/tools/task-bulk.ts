@@ -30,7 +30,7 @@ export function registerTaskBulkTool(
       // Bulk operation fields
       taskIds: z.array(z.number()).optional(),
       field: z.string().optional(),
-      value: z.unknown().optional(),
+      value: z.unknown().optional().describe('For field=labels: complete desired label ID set; [] clears labels.'),
       projectId: z.number().optional(), // Add projectId for bulk-create
       tasks: z
         .array(

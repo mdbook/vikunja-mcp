@@ -40,6 +40,7 @@ jest.mock('../../src/utils/retry', () => {
 
 describe('Tasks Tool', () => {
   let mockClient: MockVikunjaClient;
+  const labelRequest = jest.fn().mockResolvedValue({});
   let mockAuthManager: MockAuthManager;
   let mockServer: MockServer;
   let toolHandler: (args: any) => Promise<any>;
@@ -130,6 +131,7 @@ describe('Tasks Tool', () => {
         getTaskComments: jest.fn(),
         createTaskComment: jest.fn(),
         updateTaskLabels: jest.fn(),
+        request: labelRequest,
         // Labels applied one-by-one via PUT /tasks/{id}/labels (upstream #92).
         addLabelToTask: jest.fn(),
         removeLabelFromTask: jest.fn(),
@@ -993,9 +995,8 @@ describe('Tasks Tool', () => {
 
       mockClient.tasks.getTask
         .mockResolvedValueOnce(mockTask)
-        // Current-label read + final fetch return the task with label 1 already set,
-        // so only label 2 should be requested (additive semantics).
-        .mockResolvedValue(taskWithLabels);
+        // Read-back must reflect the complete requested label set.
+        .mockResolvedValue({ ...taskWithLabels, labels: [{ id: 1 }, { id: 2 }] });
       mockClient.tasks.updateTask.mockResolvedValue(taskWithLabels);
       mockClient.tasks.addLabelToTask.mockResolvedValue({});
 
@@ -1004,13 +1005,24 @@ describe('Tasks Tool', () => {
         labels: [1, 2],
       });
 
-      // One individual call per missing label; never the broken bulk endpoint (#92).
+      // Use the correct LabelTaskBulk payload, not SDK's {label_ids}.
       expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
-      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledTimes(1);
-      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, {
-        task_id: 1,
-        label_id: 2,
+      expect(labelRequest).toHaveBeenCalledWith('/tasks/1/labels/bulk', 'POST', {
+        labels: [{ id: 1 }, { id: 2 }],
       });
+    });
+
+    it('remove-label uses the shared verified label-set path', async () => {
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({ ...mockTask, labels: [{ id: 2 }, { id: 7 }] })
+        .mockResolvedValue({ ...mockTask, labels: [{ id: 2 }] });
+
+      const result = await callTool('remove-label', { id: 1, labels: [7] });
+
+      expect(labelRequest).toHaveBeenCalledWith('/tasks/1/labels/bulk', 'POST', {
+        labels: [{ id: 2 }],
+      });
+      expect(result.content[0].text).toContain('Label removed from task successfully');
     });
 
     it('should handle assignee removal failures during update', async () => {
@@ -2004,7 +2016,9 @@ describe('Tasks Tool', () => {
     });
 
     it('should handle bulk update for labels field', async () => {
-      mockClient.tasks.getTask.mockResolvedValue({ ...mockTask, labels: [] });
+      mockClient.tasks.getTask.mockResolvedValue({
+        ...mockTask, labels: [{ id: 1 }, { id: 2 }, { id: 3 }],
+      });
 
       const result = await callTool('bulk-update', {
         taskIds: [1, 2],

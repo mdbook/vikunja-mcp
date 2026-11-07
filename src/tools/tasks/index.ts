@@ -155,7 +155,7 @@ export function registerTasksTool(
       priority: z.number().min(0).max(5).optional(),
       /** Completion percentage 0–100 (Vikunja percent_done) */
       percentDone: z.number().min(0).max(100).optional(),
-      labels: z.array(z.number()).optional(),
+      labels: z.array(z.number()).optional().describe('On update: complete desired label set; [] clears, omit to preserve. Use apply-label to add.'),
       assignees: z.array(z.number()).optional(),
       // Recurring task fields
       repeatAfter: z.number().min(0).optional(),
@@ -177,7 +177,7 @@ export function registerTasksTool(
       // Bulk operation fields
       taskIds: z.array(z.number()).optional(),
       field: z.string().optional(),
-      value: z.unknown().optional(),
+      value: z.unknown().optional().describe('For bulk-update field=labels: complete desired label ID set; [] clears labels.'),
       tasks: z
         .array(
           z.object({

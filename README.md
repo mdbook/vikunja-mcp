@@ -76,8 +76,11 @@ The token type is detected automatically. Never commit credentials or share your
 client config. Logs go to stderr; stdout is reserved for the MCP protocol.
 
 Saved filters are held in memory and disappear when the server restarts.
-Label writes are additive, not replace/clear operations. File attachments are
-not implemented. See the [tool reference](docs/tools.md) for details.
+Create/apply-label add labels; update/bulk-update replace the complete set (`[]`
+clears, omission preserves). Replacement/removal verify persisted labels and require
+permission for `POST /tasks/{id}/labels/bulk`. Removal is a read-modify-write,
+not atomic against concurrent label edits. File attachments are not implemented.
+See the [tool reference](docs/tools.md) for details.
 
 ## Troubleshooting
 

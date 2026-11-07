@@ -61,6 +61,7 @@ describe('Bulk operations', () => {
       assignUserToTask: jest.fn(),
       removeUserFromTask: jest.fn(),
       updateTaskLabels: jest.fn(),
+      request: jest.fn(),
       addLabelToTask: jest.fn().mockResolvedValue({}),
     },
   };
@@ -802,11 +803,12 @@ describe('Bulk operations', () => {
       await bulkUpdateTasks({ taskIds: [1], field: 'assignees', value: [] });
       expect(mockClient.tasks.removeUserFromTask).toHaveBeenCalledWith(1, 9);
 
-      // labels: [] is a no-op under additive semantics (does not clear).
+      // labels: [] clears the set via the correctly shaped relationship payload.
       mockClient.tasks.addLabelToTask.mockResolvedValue({});
       mockClient.tasks.getTask.mockResolvedValue({ id: 1, title: 'T', labels: [] });
       await bulkUpdateTasks({ taskIds: [1], field: 'labels', value: [] });
       expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+      expect(mockClient.tasks.request).toHaveBeenCalledWith('/tasks/1/labels/bulk', 'POST', { labels: [] });
       expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
     });
 
