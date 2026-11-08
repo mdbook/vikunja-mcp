@@ -25,23 +25,12 @@ jest.mock('../../src/utils/logger', () => ({
   },
 }));
 
-// Mock retry utility to speed up tests but preserve circuit breaker registry
+// Skip retry delays while preserving real helpers, configuration, and circuit breaker registry.
 jest.mock('../../src/utils/retry', () => {
   const actual = jest.requireActual('../../src/utils/retry');
   return {
+    ...actual,
     withRetry: jest.fn().mockImplementation((fn) => fn()),
-    RETRY_CONFIG: {
-      AUTH_ERRORS: {
-        maxRetries: 3,
-      },
-      BULK_WRITES: actual.RETRY_CONFIG.BULK_WRITES,
-    },
-    isRetryableError: actual.isRetryableError,
-    // Labels/assignees use their own circuitBreakerName when withRetry is used.
-    // sin estas constantes el mock parcial las dejaba en undefined y reventaba.
-    CIRCUIT_BREAKER_NAMES: actual.CIRCUIT_BREAKER_NAMES,
-    // Preserve the real circuit breaker registry for test isolation
-    circuitBreakerRegistry: actual.circuitBreakerRegistry,
   };
 });
 
