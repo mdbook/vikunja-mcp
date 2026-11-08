@@ -25,13 +25,19 @@ export function registerTaskCommentsTool(
   server.tool(
     'vikunja_task_comments',
     'Manage task comments: add (comment), list, update (edit an existing comment), or delete a comment. '
-      + 'update requires id + commentId + comment (new text); delete requires id + commentId.',
+      + 'update requires id + commentId + comment (new text); delete requires id + commentId. '
+      + 'list returns all comments by default, oldest first; page/perPage select a page and newestFirst reverses the global order. Includes total count.',
     {
       operation: z.enum(['comment', 'list', 'update', 'delete']),
       // Task and comment identification
       id: z.number(),
       comment: z.string().optional(),
       commentId: z.number().optional(),
+      page: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional()
+        .describe('List only: 1-based page; omit to return all comments'),
+      perPage: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional()
+        .describe('List only: page size (default 50); without page, returns all comments'),
+      newestFirst: z.boolean().optional().describe('List only: newest comments first (default false)'),
     },
     async (args) => {
       try {
@@ -58,7 +64,12 @@ export function registerTaskCommentsTool(
             });
 
           case 'list':
-            return await listComments({ id: args.id });
+            return await listComments({
+              id: args.id,
+              ...(args.page !== undefined ? { page: args.page } : {}),
+              ...(args.perPage !== undefined ? { perPage: args.perPage } : {}),
+              ...(args.newestFirst !== undefined ? { newestFirst: args.newestFirst } : {}),
+            });
 
           case 'update':
             return await updateComment({

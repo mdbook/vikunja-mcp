@@ -6,6 +6,17 @@
 import type { TaskComment, Message } from '../../../types/vikunja';
 import { getClientFromContext } from '../../../client';
 
+// Use the same request seam as patchGetAllTasks: explicitly forward API query
+// parameters rather than relying on the SDK's unpaginated comment helper.
+interface CommentServiceWithRequest {
+  request(
+    endpoint: string,
+    method: string,
+    body: undefined,
+    options: { params: { page: number; per_page: number } },
+  ): Promise<TaskComment[]>;
+}
+
 /**
  * Service for managing task comment operations
  */
@@ -53,7 +64,19 @@ export const CommentOperationsService = {
    */
   async fetchTaskComments(taskId: number): Promise<TaskComment[]> {
     const client = await getClientFromContext();
-    return await client.tasks.getTaskComments(taskId);
+    const tasks = client.tasks as unknown as CommentServiceWithRequest;
+    const comments: TaskComment[] = [];
+    // Read through an empty page, not merely a short page: servers can cap
+    // per_page below the requested size. Never silently drop later comments.
+    for (let page = 1; ; page++) {
+      const batch = await tasks.request(`/tasks/${taskId}/comments`, 'GET', undefined, {
+        params: { page, per_page: 50 },
+      });
+      if (!batch || batch.length === 0) {
+        return comments;
+      }
+      comments.push(...batch);
+    }
   },
 
   /**

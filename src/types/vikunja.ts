@@ -355,6 +355,7 @@ export interface StandardTaskResponse {
     affectedFields?: string[]; // For updates
     previousState?: Partial<VikunjaTask> | VikunjaTask[]; // For updates/deletes
     count?: number; // For list operations
+    total?: number; // Total available before comment pagination
     fetchErrors?: number; // For bulk operations with fetch failures
     failedCount?: number; // For partial failures
     failedIds?: number[]; // IDs that failed in bulk operations

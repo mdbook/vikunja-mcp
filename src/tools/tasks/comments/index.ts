@@ -117,14 +117,32 @@ export async function deleteComment(args: {
  */
 export async function listComments(args: {
   id?: number;
+  page?: number;
+  perPage?: number;
+  newestFirst?: boolean;
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   try {
     const { taskId } = commentValidationService.validateListInput(args);
+    for (const key of ['page', 'perPage'] as const) {
+      const value = args[key];
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+        throw new MCPError(ErrorCode.VALIDATION_ERROR, `${key} must be a positive safe integer`);
+      }
+    }
 
     const comments = await CommentOperationsService.fetchTaskComments(taskId);
+    const total = comments.length;
+    // Vikunja returns comments oldest first. Reverse before slicing so page 1
+    // in newest-first mode contains the latest instructions, not the oldest page.
+    if (args.newestFirst) {
+      comments.reverse();
+    }
+    const perPage = args.perPage ?? 50;
+    const start = args.page === undefined ? 0 : (args.page - 1) * perPage;
+    const selected = args.page === undefined ? comments : comments.slice(start, start + perPage);
 
     // Format and return response
-    const response = commentResponseFormatter.formatListCommentsResponse(comments);
+    const response = commentResponseFormatter.formatListCommentsResponse(selected, total);
     return commentResponseFormatter.formatMcpResponse(response);
 
   } catch (error) {

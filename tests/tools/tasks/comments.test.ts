@@ -12,6 +12,7 @@ describe('Comment operations', () => {
     tasks: {
       createTaskComment: jest.fn(),
       getTaskComments: jest.fn(),
+      request: jest.fn(),
       updateTaskComment: jest.fn(),
       deleteTaskComment: jest.fn(),
     },
@@ -19,6 +20,7 @@ describe('Comment operations', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockClient.tasks.request.mockReset();
     (getClientFromContext as jest.Mock).mockResolvedValue(mockClient);
   });
 
@@ -224,11 +226,16 @@ describe('Comment operations', () => {
         { id: 1, comment: 'First comment', created: '2024-01-01' },
         { id: 2, comment: 'Second comment', created: '2024-01-02' },
       ];
-      mockClient.tasks.getTaskComments.mockResolvedValue(mockComments);
+      mockClient.tasks.request.mockResolvedValueOnce(mockComments).mockResolvedValueOnce([]);
 
       const result = await listComments({ id: 123 });
 
-      expect(mockClient.tasks.getTaskComments).toHaveBeenCalledWith(123);
+      expect(mockClient.tasks.request).toHaveBeenNthCalledWith(
+        1, '/tasks/123/comments', 'GET', undefined, { params: { page: 1, per_page: 50 } },
+      );
+      expect(mockClient.tasks.request).toHaveBeenNthCalledWith(
+        2, '/tasks/123/comments', 'GET', undefined, { params: { page: 2, per_page: 50 } },
+      );
 
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
@@ -250,7 +257,7 @@ describe('Comment operations', () => {
     });
 
     it('should handle empty comments list', async () => {
-      mockClient.tasks.getTaskComments.mockResolvedValue([]);
+      mockClient.tasks.request.mockResolvedValue([]);
 
       const result = await listComments({ id: 123 });
 
@@ -259,14 +266,114 @@ describe('Comment operations', () => {
       expect(markdown).toContain("## ✅ Success");
       expect(markdown).toContain('list');
       expect(markdown).toContain('Found 0 comments');
+      expect(markdown).toContain('**total:** 0');
+      expect(mockClient.tasks.request).toHaveBeenCalledTimes(1);
     });
 
     it('should handle API errors', async () => {
-      mockClient.tasks.getTaskComments.mockRejectedValue(new Error('API Error'));
+      mockClient.tasks.request.mockRejectedValue(new Error('API Error'));
 
       await expect(listComments({ id: 123 })).rejects.toThrow(
         'Failed to list comments: API Error'
       );
+    });
+
+    it('treats a null API list as empty', async () => {
+      mockClient.tasks.request.mockResolvedValue(null);
+      const result = await listComments({ id: 123 });
+      expect(result.content[0].text).toContain('Found 0 comments (0 total)');
+      expect(mockClient.tasks.request).toHaveBeenCalledTimes(1);
+    });
+
+    function mockCommentPages(count: number, serverPageSize = 50) {
+      const comments = Array.from({ length: count }, (_, index) => ({
+        id: index + 1,
+        task_id: 123,
+        comment: `Comment text ${index + 1}`,
+      }));
+      mockClient.tasks.request.mockImplementation(async (
+        _endpoint: unknown, _method: unknown, _body: unknown, options: unknown,
+      ) => {
+        const { page } = (options as { params: { page: number } }).params;
+        return comments.slice((page - 1) * serverPageSize, page * serverPageSize);
+      });
+    }
+
+    it.each([51, 100, 121])('returns all %i comments by default, including the newest', async (count) => {
+      mockCommentPages(count);
+      const result = await listComments({ id: 123 });
+      const markdown = result.content[0].text;
+      expect(markdown).toContain(`Found ${count} comments (${count} total)`);
+      expect(markdown).toContain(`**count:** ${count}`);
+      expect(markdown).toContain(`**total:** ${count}`);
+      for (let id = 1; id <= count; id++) {
+        expect(markdown).toContain(`Comment (ID: ${id})`);
+      }
+      expect(markdown.indexOf('Comment (ID: 1)')).toBeLessThan(
+        markdown.indexOf(`Comment (ID: ${count})`),
+      );
+      expect(mockClient.tasks.request).toHaveBeenCalledTimes(Math.ceil(count / 50) + 1);
+      expect(mockClient.tasks.getTaskComments).not.toHaveBeenCalled();
+    });
+
+    it('continues when the server caps the requested page size', async () => {
+      mockCommentPages(55, 20);
+      const result = await listComments({ id: 123 });
+      expect(result.content[0].text).toContain('Found 55 comments (55 total)');
+      expect(result.content[0].text).toContain('Comment (ID: 55)');
+      expect(mockClient.tasks.request).toHaveBeenCalledTimes(4);
+    });
+
+    it('returns a requested page with the full total', async () => {
+      mockCommentPages(121);
+      const result = await listComments({ id: 123, page: 2 });
+      const markdown = result.content[0].text;
+      expect(markdown).toContain('Found 50 comments (121 total)');
+      expect(markdown).toContain('**count:** 50');
+      expect(markdown).toContain('**total:** 121');
+      expect(markdown).toContain('Comment (ID: 51)');
+      expect(markdown).toContain('Comment (ID: 100)');
+      expect(markdown).not.toContain('Comment (ID: 50)');
+      expect(markdown).not.toContain('Comment (ID: 101)');
+    });
+
+    it('reverses the full list before selecting a newest-first page', async () => {
+      mockCommentPages(121);
+      const result = await listComments({ id: 123, page: 1, perPage: 2, newestFirst: true });
+      const markdown = result.content[0].text;
+      expect(markdown).toContain('Found 2 comments (121 total)');
+      expect(markdown.indexOf('Comment (ID: 121)')).toBeGreaterThan(-1);
+      expect(markdown.indexOf('Comment (ID: 121)')).toBeLessThan(markdown.indexOf('Comment (ID: 120)'));
+      expect(markdown).not.toContain('Comment (ID: 119)');
+      expect(markdown).not.toContain('Comment (ID: 1)');
+    });
+
+    it('returns all comments newest first when page is omitted, even with perPage', async () => {
+      mockCommentPages(51);
+      const result = await listComments({ id: 123, perPage: 2, newestFirst: true });
+      const markdown = result.content[0].text;
+      expect(markdown).toContain('Found 51 comments (51 total)');
+      expect(markdown.indexOf('Comment (ID: 51)')).toBeLessThan(markdown.indexOf('Comment (ID: 1)'));
+    });
+
+    it('returns an empty out-of-range page without losing the total', async () => {
+      mockCommentPages(51);
+      const result = await listComments({ id: 123, page: 3 });
+      expect(result.content[0].text).toContain('Found 0 comments (51 total)');
+      expect(result.content[0].text).toContain('**total:** 51');
+    });
+
+    it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid pagination value %s before fetching', async (value) => {
+      await expect(listComments({ id: 123, page: value })).rejects.toThrow('page must be a positive safe integer');
+      await expect(listComments({ id: 123, perPage: value })).rejects.toThrow('perPage must be a positive safe integer');
+      expect(mockClient.tasks.request).not.toHaveBeenCalled();
+    });
+
+    it('fails rather than returning a silently incomplete list when a later page fails', async () => {
+      mockClient.tasks.request
+        .mockResolvedValueOnce([{ id: 1, task_id: 123, comment: 'First' }])
+        .mockRejectedValueOnce(new Error('Page two failed'));
+      await expect(listComments({ id: 123 })).rejects.toThrow('Failed to list comments: Page two failed');
     });
   });
 });
