@@ -39,6 +39,7 @@ describe('Tasks CRUD - Final Coverage', () => {
         updateTask: jest.fn(),
         deleteTask: jest.fn(),
         updateTaskLabels: jest.fn(),
+        request: jest.fn().mockResolvedValue({}),
         // Labels applied via PUT /tasks/{id}/labels, one at a time.
         addLabelToTask: jest.fn(),
         assignUserToTask: jest.fn(),
@@ -279,6 +280,7 @@ describe('Tasks CRUD - Final Coverage', () => {
         done: true,
         repeat_after: 86400, // 1 day
         repeat_mode: 0,
+        labels: [{ id: 1 }, { id: 2 }],
       };
 
       mockClient.tasks.getTask

@@ -6,7 +6,7 @@
 import { MCPError, ErrorCode, createStandardResponse, getClientFromContext, logger, isAuthenticationError, isRetryableAuthError, transformApiError, handleFetchError } from '../../index';
 import type { Assignee } from '../../types';
 import { withRetry, isRetryableError, RETRY_CONFIG, type RetryOptions } from '../../utils/retry';
-import { addLabelsToTaskAdditive } from './labels';
+import { addLabelsToTaskAdditive, replaceLabelsOnTask } from './labels';
 import { addAssigneesToTaskAdditive } from './assignees';
 import { BatchProcessor } from '../../utils/performance/batch-processor';
 import type { Task } from 'node-vikunja';
@@ -113,6 +113,10 @@ export async function bulkUpdateTasks(args: BulkUpdateArgs): Promise<{ content: 
     const fieldValue = resolveBulkUpdateValue(args.field, args.value);
 
     const updateResult = await processors.update.processBatches(taskIds, async (taskId) => {
+      if (args.field === 'labels') {
+        // Return the verified read-back, not updateTask's unchanged label snapshot.
+        return await replaceLabelsOnTask(client, taskId, args.value as number[]);
+      }
       const current = await client.tasks.getTask(taskId);
       // Spread current task so fields not being changed survive Vikunja's full replace
       const update = applyFieldUpdate({ ...current }, args.field, fieldValue);
@@ -143,11 +147,6 @@ export async function bulkUpdateTasks(args: BulkUpdateArgs): Promise<{ content: 
           try { await withRetry(() => client.tasks.removeUserFromTask(taskId, userId), { ...RETRY_CONFIG.AUTH_ERRORS, shouldRetry: isRetryableAuthError }); }
           catch (e) { if (isAuthenticationError(e)) throw new MCPError(ErrorCode.API_ERROR, `${AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE_PARTIAL} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`); throw e; }
         }
-      }
-      if (args.field === 'labels' && Array.isArray(args.value)) {
-        // Avoid bulk updateTaskLabels ({label_ids}): Vikunja expects {labels} and
-        // otherwise clears every label. Same additive semantics as single-task update.
-        await addLabelsToTaskAdditive(client, taskId, args.value as number[]);
       }
       return updated;
     });

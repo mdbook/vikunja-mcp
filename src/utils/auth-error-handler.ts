@@ -17,15 +17,9 @@ export function isAuthenticationError(error: unknown): boolean {
   }
 
   // Layer 1: Check structured error properties (most reliable)
-  const errorWithStatus = error as Error & { status?: number; response?: { status?: number } };
-  
-  // Check for HTTP status codes as numbers (not strings)
-  if (errorWithStatus.status === 401 || errorWithStatus.status === 403) {
-    return true;
-  }
-  
-  // Check for Axios-style errors with response.status
-  if (errorWithStatus.response?.status === 401 || errorWithStatus.response?.status === 403) {
+  // node-vikunja uses statusCode; also supports status and Axios response.status.
+  const status = getHttpStatus(error);
+  if (status === 401 || status === 403) {
     return true;
   }
 

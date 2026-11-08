@@ -25,23 +25,12 @@ jest.mock('../../src/utils/logger', () => ({
   },
 }));
 
-// Mock retry utility to speed up tests but preserve circuit breaker registry
+// Skip retry delays while preserving real helpers, configuration, and circuit breaker registry.
 jest.mock('../../src/utils/retry', () => {
   const actual = jest.requireActual('../../src/utils/retry');
   return {
+    ...actual,
     withRetry: jest.fn().mockImplementation((fn) => fn()),
-    RETRY_CONFIG: {
-      AUTH_ERRORS: {
-        maxRetries: 3,
-      },
-      BULK_WRITES: actual.RETRY_CONFIG.BULK_WRITES,
-    },
-    isRetryableError: actual.isRetryableError,
-    // Labels/assignees use their own circuitBreakerName when withRetry is used.
-    // sin estas constantes el mock parcial las dejaba en undefined y reventaba.
-    CIRCUIT_BREAKER_NAMES: actual.CIRCUIT_BREAKER_NAMES,
-    // Preserve the real circuit breaker registry for test isolation
-    circuitBreakerRegistry: actual.circuitBreakerRegistry,
   };
 });
 
@@ -50,6 +39,7 @@ import { circuitBreakerRegistry } from '../../src/utils/retry';
 
 describe('Tasks CRUD - Authentication Error Handling', () => {
   let mockClient: MockVikunjaClient;
+  const labelRequest = jest.fn();
   const { getClientFromContext } = require('../../src/client');
 
   // Create authentication errors with proper structure
@@ -80,6 +70,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
         updateTask: jest.fn(),
         deleteTask: jest.fn(),
         updateTaskLabels: jest.fn(),
+        request: labelRequest,
         // Labels applied one-by-one via PUT /tasks/{id}/labels (upstream #92).
         addLabelToTask: jest.fn(),
         assignUserToTask: jest.fn(),
@@ -236,7 +227,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label update failure with 401 auth error
       const authError = createAuthError(401, 'Unauthorized to update labels');
-      mockClient.tasks.addLabelToTask.mockRejectedValue(authError);
+      labelRequest.mockRejectedValue(authError);
 
       await expect(
         updateTask({
@@ -266,7 +257,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label update failure with 403 Axios-style auth error
       const authError = createAxiosAuthError(403, 'Forbidden to update labels');
-      mockClient.tasks.addLabelToTask.mockRejectedValue(authError);
+      labelRequest.mockRejectedValue(authError);
 
       await expect(
         updateTask({
@@ -435,7 +426,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label update failure with non-auth error
       const nonAuthError = new Error('Database connection failed');
-      mockClient.tasks.addLabelToTask.mockRejectedValue(nonAuthError);
+      labelRequest.mockRejectedValue(nonAuthError);
 
       await expect(
         updateTask({

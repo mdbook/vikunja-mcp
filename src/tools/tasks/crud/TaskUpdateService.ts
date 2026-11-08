@@ -9,7 +9,7 @@ import type { Task, VikunjaClient } from 'node-vikunja';
 import { validateDateString, validateId, convertRepeatConfiguration, validatePercentDone } from '../validation';
 import { isAuthenticationError } from '../../../utils/auth-error-handler';
 import { RETRY_CONFIG } from '../../../utils/retry';
-import { addLabelsToTaskAdditive } from '../labels';
+import { replaceLabelsOnTask } from '../labels';
 import { addAssigneesToTaskAdditive } from '../assignees';
 import { transformApiError, handleFetchError, handleStatusCodeError } from '../../../utils/error-handler';
 import { AUTH_ERROR_MESSAGES } from '../constants';
@@ -27,6 +27,7 @@ export interface UpdateTaskArgs {
   percentDone?: number;
   /** Move the task to another project (merged into full-model update). */
   projectId?: number;
+  /** Complete desired label set; [] clears labels, omission preserves them. */
   labels?: number[];
   assignees?: number[];
   repeatAfter?: number;
@@ -67,6 +68,7 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
     if (args.percentDone !== undefined) {
       validatePercentDone(args.percentDone);
     }
+    args.labels?.forEach((id) => validateId(id, 'label ID'));
 
     const client = await getClientFromContext();
 
@@ -77,12 +79,10 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
     const updateData = buildUpdateData(updateState.currentTask, args);
     await client.tasks.updateTask(args.id, updateData);
 
-    // Update labels if provided.
-    // The semantics are ADDITIVE. What was added and what was kept are reported back, so
-    // nobody reads `labels: [3]` in their own request and assumes the task now has only 3.
-    let labelOutcome: { added: number[]; kept: number[] } | undefined;
+    // Relationships are not mutated by updateTask's full-model payload.
+    let labeledTask: Task | undefined;
     if (args.labels !== undefined) {
-      labelOutcome = await updateTaskLabels(client, args.id, args.labels);
+      labeledTask = await replaceLabelsOnTask(client, args.id, args.labels);
     }
 
     // Update assignees if provided
@@ -91,7 +91,9 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
     }
 
     // Fetch the complete updated task
-    const completeTask = await client.tasks.getTask(args.id);
+    const completeTask = labeledTask && args.assignees === undefined
+      ? labeledTask
+      : await client.tasks.getTask(args.id);
 
     // Verify project move actually stuck — Vikunja can report success while leaving
     // the task in the old project (silent failure → data loss if the old project is deleted)
@@ -113,12 +115,9 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
         affectedFields: updateState.affectedFields,
         previousState: updateState.previousState as Partial<Task>,
         taskId: args.id,
-        ...(labelOutcome && {
-          // labelsAdded already exists on TaskResponseMetadata as a boolean.
-          labelsAppliedIds: labelOutcome.added,
-          labelsKeptIds: labelOutcome.kept,
+        ...(args.labels !== undefined && {
           labelSemantics:
-            'additive: the labels sent are ADDED to the existing ones; use remove-label to remove any',
+            'replacement: labels is the complete desired set; [] clears labels; use apply-label to add',
         }),
       },
       undefined, // verbosity (ignored - using standard AORP)
@@ -233,34 +232,6 @@ function buildUpdateData(currentTask: Task, args: UpdateTaskArgs): Task {
   };
 
   return updateData;
-}
-
-/**
- * Adds labels to a task (ADDITIVE) with authentication error handling.
- *
- * This function used to REPLACE the label set through the bulk endpoint. Against a live
- * server that left tasks with NO labels at all: it removed the ones already there and did
- * not apply the requested ones either, because Vikunja expects `{labels: [...]}` on that
- * route and `node-vikunja` sends `{label_ids: [...]}`.
- *
- * It now delegates to `addLabelsToTaskAdditive`, which applies only what is missing, one
- * individual call per label — the same non-destructive shape `updateTaskAssignees` right
- * below already uses.
- */
-async function updateTaskLabels(
-  client: VikunjaClient,
-  taskId: number,
-  labelIds: number[],
-): Promise<{ added: number[]; kept: number[] }> {
-  try {
-    return await addLabelsToTaskAdditive(client, taskId, labelIds);
-  } catch (labelError) {
-    // Check if it's an auth error
-    if (isAuthenticationError(labelError)) {
-      throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_UPDATE);
-    }
-    throw labelError;
-  }
 }
 
 /**

@@ -1,149 +1,148 @@
-/**
- * Regression: labels are never wiped when updating a task (upstream #92)
- *
- * Real failure (Vikunja v2.4.0): a task had labels [2, 4]; an MCP update with
- * `labels: [3]` reported success and left the task with ZERO labels — the two
- * it had were gone and 3 was never applied.
- *
- * Double cause:
- *  1. `updateTaskLabels` treated the requested set as a REPLACE of the existing one.
- *  2. That bulk endpoint (`POST /tasks/{id}/labels/bulk`) expects `{labels:[…]}`,
- *     but node-vikunja sends `{label_ids:[…]}`. Vikunja drops the unknown field,
- *     reads an empty list, and clears everything.
- *
- * These tests emulate that server: `updateTaskLabels` DESTROYS (as in production)
- * and `addLabelToTask` (`PUT /tasks/{id}/labels`, 201) actually adds. If anyone
- * reverts to bulk or replace semantics, the final set stops being the union and
- * these fail.
- */
-
+/** Regression for global ticket 1787: correct label-set payload + verified writes. */
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { updateTask } from '../../../src/tools/tasks/crud/TaskUpdateService';
 import { bulkUpdateTasks } from '../../../src/tools/tasks/bulk-operations';
+import { applyLabels, removeLabels } from '../../../src/tools/tasks/labels';
 import { getClientFromContext } from '../../../src/client';
-import { isAuthenticationError } from '../../../src/utils/auth-error-handler';
 import { withRetry } from '../../../src/utils/retry';
 
 jest.mock('../../../src/client');
-jest.mock('../../../src/utils/auth-error-handler');
-jest.mock('../../../src/utils/retry');
+jest.mock('../../../src/utils/retry', () => ({
+  ...jest.requireActual('../../../src/utils/retry'),
+  withRetry: jest.fn(),
+}));
 jest.mock('../../../src/utils/logger');
 
-describe('Labels: update is additive, never destructive (upstream #92)', () => {
-  /** Per-task label ids held by the fake server. */
+describe('Verified label replacement and removal (global ticket 1787)', () => {
   let serverLabels: Map<number, number[]>;
-
   const mockClient = {
     tasks: {
       getTask: jest.fn(),
       updateTask: jest.fn(),
-      bulkUpdateTasks: jest.fn(),
+      request: jest.fn(),
       addLabelToTask: jest.fn(),
       removeLabelFromTask: jest.fn(),
       updateTaskLabels: jest.fn(),
-      assignUserToTask: jest.fn(),
-      removeUserFromTask: jest.fn(),
     },
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    serverLabels = new Map<number, number[]>();
-
+    jest.resetAllMocks();
+    serverLabels = new Map([[1763, [2, 7]]]);
     (getClientFromContext as jest.Mock).mockResolvedValue(mockClient);
-    (isAuthenticationError as jest.Mock).mockReturnValue(false);
-    // Bypass timers/breaker — this suite asserts label semantics only.
     (withRetry as jest.Mock).mockImplementation((fn: () => Promise<unknown>) => fn());
-
     mockClient.tasks.getTask.mockImplementation(async (id: number) => ({
-      id,
-      title: `Task ${id}`,
-      project_id: 1,
-      done: false,
+      id, title: `Task ${id}`, project_id: 1, description: 'keep me', priority: 4,
       labels: (serverLabels.get(id) ?? []).map((labelId) => ({
-        id: labelId,
-        title: `label-${labelId}`,
+        id: labelId, title: `label-${labelId}`,
       })),
     }));
-
-    mockClient.tasks.updateTask.mockImplementation(async (id: number, data: unknown) => ({
-      ...(data as Record<string, unknown>),
-      id,
-    }));
-
-    // PUT /tasks/{id}/labels — the individual endpoint that actually works (201).
-    mockClient.tasks.addLabelToTask.mockImplementation(
-      async (id: number, body: { label_id: number }) => {
-        const current = serverLabels.get(id) ?? [];
-        if (current.includes(body.label_id)) {
-          // Vikunja returns 400 when the label is already present.
-          throw new Error('label already exists on task');
-        }
-        serverLabels.set(id, [...current, body.label_id]);
+    // Updating the task model does not change label relationships.
+    mockClient.tasks.updateTask.mockImplementation(async (_id: number, data: unknown) => data);
+    mockClient.tasks.request.mockImplementation(
+      async (path: string, method: string, body: { labels: Array<{ id: number }> }) => {
+        expect(method).toBe('POST');
+        expect(body).toEqual({ labels: expect.any(Array) });
+        const match = /^\/tasks\/(\d+)\/labels\/bulk$/.exec(path);
+        expect(match).not.toBeNull();
+        const ids = body.labels.map((label) => {
+          expect(label).toEqual({ id: expect.any(Number) });
+          return label.id;
+        });
+        serverLabels.set(Number(match?.[1]), ids);
         return {};
       },
     );
-
-    // POST /tasks/{id}/labels/bulk with {label_ids} — real server behaviour:
-    // unknown field dropped → empty list applied → task left with no labels.
-    mockClient.tasks.updateTaskLabels.mockImplementation(async (id: number) => {
-      serverLabels.set(id, []);
-      return {};
-    });
+    mockClient.tasks.addLabelToTask.mockImplementation(
+      async (id: number, body: { label_id: number }) => {
+        serverLabels.set(id, [...(serverLabels.get(id) ?? []), body.label_id]);
+        return {};
+      },
+    );
+    mockClient.tasks.removeLabelFromTask.mockRejectedValue(new Error('DELETE failed'));
+    mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('wrong payload'));
   });
 
-  it('update with labels:[3] on a task that has [2,4] keeps both and adds the third', async () => {
-    serverLabels.set(331, [2, 4]);
+  it.each([{ ids: [2] }, { ids: [6] }, { ids: [] }, { ids: [7, 2, 2] }])(
+    'update replaces labels with $ids', async ({ ids }) => {
+      await updateTask({ id: 1763, labels: ids });
+      expect(serverLabels.get(1763)).toEqual([...new Set(ids)]);
+      expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+      expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1763, expect.objectContaining({
+        description: 'keep me', priority: 4,
+      }));
+    },
+  );
 
-    await updateTask({ id: 331, title: 'Multi-agent protocol', labels: [3] });
+  it('omission preserves labels while apply-label remains additive', async () => {
+    await updateTask({ id: 1763, title: 'Title only' });
+    expect(mockClient.tasks.request).not.toHaveBeenCalled();
+    await applyLabels({ id: 1763, labels: [2, 6] });
+    expect(serverLabels.get(1763)).toEqual([2, 7, 6]);
+  });
 
-    expect([...(serverLabels.get(331) ?? [])].sort()).toEqual([2, 3, 4]);
-    // Neither destructive path should be used anymore.
-    expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+  it('remove-label keeps unrequested labels and tolerates duplicates and absent IDs', async () => {
+    await removeLabels({ id: 1763, labels: [7, 7, 99] });
+    expect(serverLabels.get(1763)).toEqual([2]);
+    expect(mockClient.tasks.request).toHaveBeenCalledWith(
+      '/tasks/1763/labels/bulk', 'POST', { labels: [{ id: 2 }] },
+    );
     expect(mockClient.tasks.removeLabelFromTask).not.toHaveBeenCalled();
-    // Only the missing label is requested, via one individual call.
-    expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledTimes(1);
-    expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(331, {
-      task_id: 331,
-      label_id: 3,
-    });
+    await removeLabels({ id: 1763, labels: [2] });
+    expect(serverLabels.get(1763)).toEqual([]);
   });
 
-  it('re-requesting a label that is already present is a no-op', async () => {
-    serverLabels.set(331, [2, 4]);
-
-    await updateTask({ id: 331, labels: [2, 4] });
-
-    expect([...(serverLabels.get(331) ?? [])].sort()).toEqual([2, 4]);
-    expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
+  it('bulk-update replaces each set and returns verified labels, not stale snapshots', async () => {
+    serverLabels.set(1764, [6]);
+    const result = await bulkUpdateTasks({ taskIds: [1763, 1764], field: 'labels', value: [2] });
+    expect(serverLabels.get(1763)).toEqual([2]);
+    expect(serverLabels.get(1764)).toEqual([2]);
+    expect(mockClient.tasks.updateTask).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain('Successfully updated 2 tasks');
+    expect(result.content[0].text).not.toContain('label-7');
+    expect(result.content[0].text).not.toContain('label-6');
+    await bulkUpdateTasks({ taskIds: [1763, 1764], field: 'labels', value: [] });
+    expect(serverLabels.get(1763)).toEqual([]);
+    expect(serverLabels.get(1764)).toEqual([]);
   });
 
-  it('an update that omits labels leaves existing labels intact', async () => {
-    serverLabels.set(331, [2, 4]);
-
-    await updateTask({ id: 331, title: 'Title only change' });
-
-    expect([...(serverLabels.get(331) ?? [])].sort()).toEqual([2, 4]);
-    expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
-    expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+  it('rejects silent no-op responses for update, removal and bulk-update', async () => {
+    mockClient.tasks.request.mockResolvedValue({});
+    await expect(updateTask({ id: 1763, labels: [2] })).rejects.toThrow('was not applied');
+    await expect(removeLabels({ id: 1763, labels: [7] })).rejects.toThrow('was not applied');
+    await expect(bulkUpdateTasks({ taskIds: [1763], field: 'labels', value: [2] }))
+      .rejects.toThrow('Failed IDs: 1763');
   });
 
-  it('bulk-update labels across 3 tasks adds without wiping each task’s existing set', async () => {
-    // Each task starts with different labels; the bug wiped all three at once.
-    serverLabels.set(101, [2, 4]);
-    serverLabels.set(102, [4]);
-    serverLabels.set(103, []);
+  it('reports partial bulk failure when one write silently does nothing', async () => {
+    mockClient.tasks.request.mockResolvedValueOnce({});
+    const result = await bulkUpdateTasks({ taskIds: [1763, 1764], field: 'labels', value: [2] });
+    expect(result.content[0].text).toContain('Successfully updated 1 tasks, 1 failed');
+    expect(result.content[0].text).toContain('1763');
+    expect(result.content[0].text).toContain('Error');
+  });
 
-    // Fork never calls native bulkUpdateTasks; keep the mock rejected for clarity.
-    mockClient.tasks.bulkUpdateTasks.mockRejectedValue(new Error('bulk endpoint: invalid field'));
+  it('rejects a wrong label set even when the label count matches', async () => {
+    serverLabels.set(1763, [2]);
+    mockClient.tasks.request.mockResolvedValue({});
+    await expect(updateTask({ id: 1763, labels: [6] })).rejects.toThrow('was not applied');
+  });
 
-    await bulkUpdateTasks({ taskIds: [101, 102, 103], field: 'labels', value: [3] });
+  it.each([401, 403])('reports required token permission on HTTP %i', async (status) => {
+    const error = Object.assign(new Error('Forbidden'), { status });
+    mockClient.tasks.request.mockRejectedValue(error);
+    await expect(removeLabels({ id: 1763, labels: [7] }))
+      .rejects.toThrow('permission for POST /tasks/{id}/labels/bulk');
+    expect(serverLabels.get(1763)).toEqual([2, 7]);
+    const options = (withRetry as jest.Mock).mock.calls[0]?.[1] as {
+      shouldRetry: (error: Error) => boolean;
+    };
+    expect(options.shouldRetry(error)).toBe(false);
+  });
 
-    expect([...(serverLabels.get(101) ?? [])].sort()).toEqual([2, 3, 4]);
-    expect([...(serverLabels.get(102) ?? [])].sort()).toEqual([3, 4]);
-    expect([...(serverLabels.get(103) ?? [])].sort()).toEqual([3]);
-    expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
-    expect(mockClient.tasks.removeLabelFromTask).not.toHaveBeenCalled();
-    expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledTimes(3);
+  it('validates label IDs before mutating a task', async () => {
+    await expect(updateTask({ id: 1763, labels: [0] })).rejects.toThrow('positive integer');
+    expect(mockClient.tasks.updateTask).not.toHaveBeenCalled();
+    expect(mockClient.tasks.request).not.toHaveBeenCalled();
   });
 });
