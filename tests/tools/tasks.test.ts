@@ -2016,8 +2016,23 @@ describe('Tasks Tool', () => {
     });
 
     it('should handle bulk update for labels field', async () => {
-      mockClient.tasks.getTask.mockResolvedValue({
-        ...mockTask, labels: [{ id: 1 }, { id: 2 }, { id: 3 }],
+      const desiredLabels = [{ id: 1 }, { id: 2 }, { id: 3 }];
+      const labelsByTask = new Map([
+        [1, [{ id: 2 }, { id: 7 }]],
+        [2, [{ id: 7 }]],
+      ]);
+      // Reads reflect a changed label set only after that task's label-set write.
+      for (const taskId of [1, 2]) {
+        labelRequest.mockImplementationOnce(async () => {
+          labelsByTask.set(taskId, desiredLabels);
+          return {};
+        });
+      }
+      mockClient.tasks.getTask.mockImplementation((id: number) => {
+        expect(labelRequest).toHaveBeenCalledWith(`/tasks/${id}/labels/bulk`, 'POST', {
+          labels: desiredLabels,
+        });
+        return Promise.resolve({ ...mockTask, id, labels: labelsByTask.get(id) ?? [] });
       });
 
       const result = await callTool('bulk-update', {
@@ -2032,8 +2047,16 @@ describe('Tasks Tool', () => {
       expect(aorpStatus.type).toBe('success');
       expect(markdown).toContain('Successfully updated 2 tasks');
       expect(mockClient.tasks.bulkUpdateTasks).not.toHaveBeenCalled();
-      expect(mockClient.tasks.updateTask).toHaveBeenCalledTimes(2);
-      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalled();
+      expect(mockClient.tasks.updateTask).not.toHaveBeenCalled();
+      expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
+      expect(labelRequest).toHaveBeenCalledTimes(2);
+      for (const taskId of [1, 2]) {
+        expect(labelRequest).toHaveBeenCalledWith(`/tasks/${taskId}/labels/bulk`, 'POST', {
+          labels: desiredLabels,
+        });
+        expect(mockClient.tasks.getTask).toHaveBeenCalledWith(taskId);
+      }
+      expect(mockClient.tasks.getTask).toHaveBeenCalledTimes(2);
     });
 
     it('should handle bulk update for due_date field', async () => {

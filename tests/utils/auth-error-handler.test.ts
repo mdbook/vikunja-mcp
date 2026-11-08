@@ -80,6 +80,26 @@ describe('Auth Error Handler', () => {
       expect(isAuthenticationError(axiosForbidden)).toBe(true);
     });
 
+    it.each([401, 403])('should identify node-vikunja-shaped HTTP %i errors', (statusCode) => {
+      const error = Object.assign(new Error(
+        'Label operation failed due to authentication issue. Original error: You do not have the right to see this',
+      ), {
+        name: 'LabelAuthenticationError',
+        statusCode,
+        response: { message: 'You do not have the right to see this', code: 'kg.forbidden' },
+      });
+
+      expect(isAuthenticationError(error)).toBe(true);
+    });
+
+    it.each([400, 404, 500, '401', '403'])(
+      'should not classify non-auth or non-numeric statusCode %s as authentication', (statusCode) => {
+        const error = Object.assign(new Error('Request failed'), { statusCode });
+
+        expect(isAuthenticationError(error)).toBe(false);
+      },
+    );
+
     it('should identify token errors with precise patterns', () => {
       expect(isAuthenticationError(new Error('invalid token'))).toBe(true);
       expect(isAuthenticationError(new Error('token invalid'))).toBe(true);
