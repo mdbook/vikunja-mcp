@@ -102,6 +102,24 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^node-vikunja$": "<rootDir>/node_modules/node-vikunja/dist/esm/index.js"
+    },
+    "transform": {
+      "^.+/node-vikunja/.+\\.js$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true,
+            "module": "CommonJS",
+            "moduleResolution": "Node"
+          }
+        }
+      ]
+    },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!node-vikunja/)"
+    ],
     "roots": [
       "<rootDir>/src",
       "<rootDir>/tests"

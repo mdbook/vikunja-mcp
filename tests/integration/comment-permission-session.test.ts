@@ -11,6 +11,8 @@ import { circuitBreakerRegistry } from '../../src/utils/retry';
 
 // Exercise the installed SDK, not __mocks__/node-vikunja.ts. Only HTTP is mocked;
 // comment validation, operations, client caching, and read/list handlers are real.
+// The Jest mapper targets the shipped ESM build (the package's CJS entry is absent),
+// and ts-jest compiles that SDK in this realm so the fetch spy below intercepts it.
 jest.unmock('node-vikunja');
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
