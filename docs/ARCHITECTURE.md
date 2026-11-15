@@ -37,8 +37,29 @@ Uses singleton pattern for Vikunja client:
 
 ### Retry Logic
 Implements exponential backoff for transient failures:
-- Authentication errors: 3 retries with 1s initial delay, doubling each time
+- Deterministic HTTP 401/403 and other permanent 4xx errors fail immediately,
+  even with a custom retry predicate; the same credentials/request are not repaired by retrying
 - Network errors: 5 retries with 500ms initial delay, 1.5x backoff factor
-- Maximum delay capped at 10s for auth errors, 30s for network errors
+- HTTP 408/429, 5xx and transient network/SQLite lock errors remain retryable
+- Maximum delay capped at 30s for network errors
 - Non-retryable errors (validation, not found) fail immediately
 - Error messages include retry count for transparency
+
+### Application availability breaker
+
+`src/utils/retry.ts` uses Opossum with a 50% error-rate threshold and a minimum
+volume of 5 attempts, a 30s operation timeout and a 30s reset timeout. After the
+reset timeout, a half-open probe can close the breaker on success. Retries are
+separate attempts for breaker accounting. Permanent HTTP 4xx errors (except
+408/429) and status-less authentication errors are filtered from failure
+accounting but still rejected to the caller.
+
+The registry is process-wide, keyed by **breaker name**, not session or resource.
+Named configurations share state across callers using that name (for example,
+`vikunja-auth-connect`); task helpers use operation names such as
+`vikunja-task-get`. Anonymous `withRetry` calls get a unique per-call key.
+Authentication/session changes do not clear this registry.
+
+This describes the application's retry helper, not any resilience policy inside
+`node-vikunja`. Comment operations call the SDK directly; their end-to-end
+availability behavior also depends on that dependency.
