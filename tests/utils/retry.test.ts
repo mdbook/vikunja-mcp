@@ -1,21 +1,14 @@
 import { withRetry, isTransientError, isRetryableError, RETRY_CONFIG, circuitBreakerRegistry } from '../../src/utils/retry';
-import { isAuthenticationError } from '../../src/utils/auth-error-handler';
 import { logger } from '../../src/utils/logger';
 
 jest.mock('../../src/utils/logger');
-jest.mock('../../src/utils/auth-error-handler', () => ({
-  isAuthenticationError: jest.fn()
-}));
 
 describe('retry utility', () => {
-  const mockIsAuthenticationError = isAuthenticationError as jest.MockedFunction<typeof isAuthenticationError>;
-  
   const noBreaker = { enableCircuitBreaker: false };
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
-    mockIsAuthenticationError.mockReturnValue(false);
     circuitBreakerRegistry.clear();
   });
 
@@ -33,13 +26,12 @@ describe('retry utility', () => {
       expect(operation).toHaveBeenCalledTimes(1);
     });
 
-    it('should retry on authentication error', async () => {
-      const authError = new Error('Authentication failed');
-      mockIsAuthenticationError.mockReturnValue(true);
+    it('should retry on a transient server error', async () => {
+      const serverError = new Error('Internal Server Error');
       
       const operation = jest.fn()
-        .mockRejectedValueOnce(authError)
-        .mockRejectedValueOnce(authError)
+        .mockRejectedValueOnce(serverError)
+        .mockRejectedValueOnce(serverError)
         .mockResolvedValueOnce('success');
       
       const promise = withRetry(operation, noBreaker);
@@ -74,10 +66,9 @@ describe('retry utility', () => {
     });
 
     it('should throw after max retries', async () => {
-      const authError = new Error('Authentication failed');
-      mockIsAuthenticationError.mockReturnValue(true);
+      const serverError = new Error('Internal Server Error');
       
-      const operation = jest.fn().mockRejectedValue(authError);
+      const operation = jest.fn().mockRejectedValue(serverError);
       
       const promise = withRetry(operation, { ...noBreaker, maxRetries: 2 });
       
@@ -89,7 +80,7 @@ describe('retry utility', () => {
       // Second retry
       await jest.advanceTimersByTimeAsync(2000);
       
-      await expect(promise).rejects.toThrow('Authentication failed');
+      await expect(promise).rejects.toThrow('Internal Server Error');
       expect(operation).toHaveBeenCalledTimes(3); // initial + 2 retries
     });
 
@@ -129,8 +120,7 @@ describe('retry utility', () => {
     });
 
     it('should respect max delay', async () => {
-      const error = new Error('Error');
-      mockIsAuthenticationError.mockReturnValue(true);
+      const error = new Error('Network error');
       
       const operation = jest.fn().mockRejectedValue(error);
       
@@ -152,7 +142,7 @@ describe('retry utility', () => {
       await jest.advanceTimersByTimeAsync(3000);
       await jest.advanceTimersByTimeAsync(3000);
       
-      await expect(promise).rejects.toThrow('Error');
+      await expect(promise).rejects.toThrow('Network error');
       expect(operation).toHaveBeenCalledTimes(6); // initial + 5 retries
     });
 
@@ -169,8 +159,7 @@ describe('retry utility', () => {
     });
 
     it('should calculate exponential backoff correctly', async () => {
-      const error = new Error('Error');
-      mockIsAuthenticationError.mockReturnValue(true);
+      const error = new Error('Network error');
       
       const operation = jest.fn().mockRejectedValue(error);
       const debugCalls: any[] = [];
@@ -201,7 +190,7 @@ describe('retry utility', () => {
       await jest.advanceTimersByTimeAsync(400);
       expect(debugCalls[2].msg).toContain('Retrying operation after 400ms');
       
-      await expect(promise).rejects.toThrow('Error');
+      await expect(promise).rejects.toThrow('Network error');
     });
 
     it('should not retry when maxRetries is 0', async () => {
@@ -267,6 +256,30 @@ describe('retry utility', () => {
   });
 
   describe('isRetryableError', () => {
+    it.each([400, 401, 403, 404, 405, 409, 422])(
+      'should not retry or classify HTTP %i as transient, regardless of message',
+      statusCode => {
+        const error = Object.assign(new Error('Network timeout: database is locked'), {
+          statusCode,
+        });
+        expect(isRetryableError(error)).toBe(false);
+        expect(isTransientError(error)).toBe(false);
+      },
+    );
+
+    it.each(['Unauthorized', '403 Forbidden', 'Authentication failed', 'invalid token'])(
+      'should not retry an authentication failure without a status: %s',
+      message => {
+        expect(isRetryableError(new Error(message))).toBe(false);
+      },
+    );
+
+    it.each([408, 429, 500, 503])('should retain transient HTTP %i handling', status => {
+      const error = Object.assign(new Error('upstream failure'), { status });
+      expect(isRetryableError(error)).toBe(true);
+      expect(isTransientError(error)).toBe(true);
+    });
+
     it('should retry Internal Server Error and SQLite lock messages', () => {
       expect(isRetryableError(new Error('Internal Server Error'))).toBe(true);
       expect(isRetryableError(new Error('database is locked'))).toBe(true);

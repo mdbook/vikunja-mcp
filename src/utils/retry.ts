@@ -140,6 +140,8 @@ export function createCircuitBreaker<T>(
       resetTimeout: opts.resetTimeout,
       errorThresholdPercentage: opts.errorThresholdPercentage,
       volumeThreshold: opts.volumeThreshold,
+      // Request/permission failures say nothing about upstream availability.
+      errorFilter: isPermanentRequestError,
     },
   );
 
@@ -174,6 +176,12 @@ export async function withRetry<T>(
       return await breaker.fire(operation) as Promise<T>;
     } catch (error) {
       lastError = error;
+
+      // Retrying the same credentials or invalid request cannot repair it, even
+      // when a caller supplies an auth-specific shouldRetry predicate.
+      if (isPermanentRequestError(error)) {
+        throw error;
+      }
 
       const shouldRetry = opts.shouldRetry
         ? opts.shouldRetry(error as Error)
@@ -244,19 +252,29 @@ export function getHttpStatus(error: unknown): number | undefined {
   return undefined;
 }
 
+/** Permanent client errors must neither retry nor trip an availability breaker. */
+export function isPermanentRequestError(error: unknown): boolean {
+  const status = getHttpStatus(error);
+  if (status !== undefined) {
+    return status >= 400 && status < 500 && status !== 408 && status !== 429;
+  }
+  return isAuthenticationError(error);
+}
+
 /**
  * Check if error is retryable (basic implementation).
  * Includes transient Vikunja/SQLite write failures ("database is locked" → HTTP 500).
  */
 export function isRetryableError(error: unknown): error is ErrorWithCode {
+  if (isPermanentRequestError(error)) {
+    return false;
+  }
   if (error instanceof Error) {
-    // Authentication errors are retryable
-    if (isAuthenticationError(error)) {
-      return true;
-    }
-
     const status = getHttpStatus(error);
-    if (status === 429 || (typeof status === 'number' && status >= 500 && status < 600)) {
+    if (
+      status === 408 || status === 429 ||
+      (typeof status === 'number' && status >= 500 && status < 600)
+    ) {
       return true;
     }
 
@@ -278,9 +296,15 @@ export function isRetryableError(error: unknown): error is ErrorWithCode {
  * Check if error is transient for circuit breaker purposes
  */
 export function isTransientError(error: unknown): error is ErrorWithCode {
+  if (isPermanentRequestError(error)) {
+    return false;
+  }
   if (error instanceof Error) {
     const status = getHttpStatus(error);
-    if (status === 429 || (typeof status === 'number' && status >= 500 && status < 600)) {
+    if (
+      status === 408 || status === 429 ||
+      (typeof status === 'number' && status >= 500 && status < 600)
+    ) {
       return true;
     }
 
