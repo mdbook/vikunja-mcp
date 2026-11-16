@@ -269,7 +269,10 @@ const FilterExpressionSchema = z.object({
 export function validateFilterExpression(expression: unknown): FilterExpression {
   try {
     // Use Zod for comprehensive type-safe validation
-    const result = FilterExpressionSchema.parse(expression);
+    const result = FilterExpressionSchema.parse(expression, {
+      // Preserve the missing-field signal used for malformed nested groups below.
+      error: issue => issue.code === 'invalid_type' && issue.input === undefined ? 'Required' : undefined,
+    });
 
     // Validate each condition individually for additional safety
     for (let i = 0; i < result.groups.length; i++) {
@@ -298,10 +301,7 @@ export function validateFilterExpression(expression: unknown): FilterExpression 
         }
         // Handle exceed maximum nesting depth or array size
         if (firstIssue.code === 'too_big') {
-          if (firstIssue.message.includes('Array must contain at most 10 element(s)')) {
-            throw new MCPError(ErrorCode.VALIDATION_ERROR, 'Filter expression exceeds maximum nesting depth of 10');
-          }
-          if (firstIssue.message.includes('conditions') || firstIssue.message.includes('50') || firstIssue.message.includes('Array must contain at most 50')) {
+          if (firstIssue.path[firstIssue.path.length - 1] === 'conditions') {
             throw new MCPError(ErrorCode.VALIDATION_ERROR, 'Filter expression cannot exceed 50 total conditions');
           }
           // Generic too_big error for filter expressions

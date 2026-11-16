@@ -186,7 +186,7 @@ export function registerExportTool(server: McpServer, authManager: AuthManager, 
           /* istanbul ignore next 4 */
           throw new MCPError(
             ErrorCode.VALIDATION_ERROR,
-            `Invalid parameters: ${error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')}`,
+            `Invalid parameters: ${error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')}`,
           );
         }
         throw error;
@@ -258,7 +258,7 @@ export function registerExportTool(server: McpServer, authManager: AuthManager, 
           /* istanbul ignore next 4 */
           throw new MCPError(
             ErrorCode.VALIDATION_ERROR,
-            `Invalid parameters: ${error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')}`,
+            `Invalid parameters: ${error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')}`,
           );
         }
         throw error;
@@ -331,7 +331,7 @@ export function registerExportTool(server: McpServer, authManager: AuthManager, 
           /* istanbul ignore next 4 */
           throw new MCPError(
             ErrorCode.VALIDATION_ERROR,
-            `Invalid parameters: ${error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')}`,
+            `Invalid parameters: ${error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')}`,
           );
         }
         throw error;

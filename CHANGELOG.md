@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Upgrade tool validation to Zod 4 and use the MCP SDK's native Zod 4 JSON schema conversion, retaining SDK major 1 ([ticket 2743](https://tickets.mdbook.me/tasks/2743)).
 - Stop retrying permanent HTTP request errors in the application retry helper and exclude them from its shared availability breakers ([ticket 2687](https://tickets.mdbook.me/tasks/2687)).
 - Recognize node-vikunja's HTTP 401/403 status codes so label-set permission errors fail without retries and identify the required API route (#1787).
 - Read all task comment pages by default; support explicit pages and newest-first order with total counts ([ticket 2221](https://tickets.mdbook.me/tasks/2221)).
