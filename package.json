@@ -169,7 +169,8 @@
   "allowScripts": {
     "better-sqlite3@12.4.1": true,
     "esbuild@0.25.12": true,
-    "unrs-resolver@1.11.1": true,
+    "unrs-resolver@1.13.0": true,
+    "@parcel/watcher@2.6.0": false,
     "fsevents": false
   }
 }
