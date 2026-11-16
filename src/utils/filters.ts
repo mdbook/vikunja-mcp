@@ -628,7 +628,7 @@ export function parseFilterString(filterStr: string): ParseResult {
         error: {
           message: 'Invalid filter structure',
           position: 0,
-          context: validationResult.error.errors.map(e => e.message).join(', ')
+          context: validationResult.error.issues.map(e => e.message).join(', ')
         }
       };
     }
@@ -782,10 +782,10 @@ export function validateCondition(condition: FilterCondition): string[] {
   // Check if condition has valid structure first
   const result = FilterConditionSchema.safeParse(condition);
   if (!result.success) {
-    const errors = result.error.errors.map(e => e.message);
+    const errors = result.error.issues.map(e => e.message);
 
     // Convert Zod enum error to more user-friendly message
-    if (errors.some(e => e.includes('enum value'))) {
+    if (result.error.issues.some(issue => issue.code === 'invalid_value')) {
       return ['Invalid field name'];
     }
 
@@ -813,7 +813,7 @@ export function validateFilterExpression(
   // Zod schema validation
   const schemaResult = FilterExpressionSchema.safeParse(expression);
   if (!schemaResult.success) {
-    errors.push(...schemaResult.error.errors.map(e => e.message));
+    errors.push(...schemaResult.error.issues.map(e => e.message));
   }
 
   // Custom validation

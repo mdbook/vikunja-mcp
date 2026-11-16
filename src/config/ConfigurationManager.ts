@@ -128,7 +128,7 @@ export class ConfigurationManager {
       if (error instanceof z.ZodError) {
         throw new ConfigurationError(
           'validation',
-          `Configuration validation failed: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`
+          `Configuration validation failed: ${error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`
         );
       }
       throw error;
@@ -264,7 +264,7 @@ export class ConfigurationManager {
     } catch (error) {
       if (error instanceof z.ZodError) {
         // Provide detailed validation errors
-        const errors = error.errors.map(err => ({
+        const errors = error.issues.map(err => ({
           path: err.path.join('.'),
           message: err.message,
           received: 'received' in err ? err.received : 'unknown',

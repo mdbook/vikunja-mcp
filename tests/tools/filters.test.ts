@@ -394,7 +394,7 @@ describe('vikunja_filters tool', () => {
         const parsed = parseMarkdown(markdown);
         // These should fail validation as non-string values
         expect(parsed.hasHeading(2, /❌ Error/)).toBe(true);
-        expect(markdown).toContain('Expected string, received');
+        expect(markdown).toContain('Invalid input: expected string, received');
       }
     });
 
@@ -859,7 +859,7 @@ describe('vikunja_filters tool', () => {
       const parsed = parseMarkdown(markdown);
       expect(parsed.hasHeading(2, /❌ Error/)).toBe(true);
       // update-filter operation name removed in new format
-      expect(markdown).toContain('Required');
+      expect(markdown).toContain('Invalid input: expected string, received undefined');
       expect(markdown).toContain('id');
     });
 
